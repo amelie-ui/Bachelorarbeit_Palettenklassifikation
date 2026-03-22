@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+data/dataset/
+data/dataset_test/
+models/
+outputs/
+.DS_Store
+*.tflite
+*.keras
+.idea/
