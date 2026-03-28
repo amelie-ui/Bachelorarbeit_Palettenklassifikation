@@ -46,8 +46,7 @@ def evaluate_keras(model_name: str = 'baseline'):
         target_names=class_names,
         output_dict=True    # dict statt String → weiterverarbeitbar
     )
-
-    # Gesamtaccuracy
+    macro_f1 = report['macro avg']['f1-score']
     accuracy = np.mean(y_true == y_pred)
 
     # ── 4. Ausgabe ────────────────────────────────────────
@@ -64,9 +63,12 @@ def evaluate_keras(model_name: str = 'baseline'):
     # ── 5. Ergebnisse speichern ───────────────────────────
     # Als JSON → für spätere Vergleichstabelle in Kap. 5
     output = {
-        'model':    model_name,
-        'accuracy': accuracy,
-        'report':   report,
+        'model': model_name,
+        'accuracy': float(accuracy),
+        'macro_f1': float(macro_f1),
+        'y_true': y_true.tolist(),  # Neu: Konvertierung von numpy zu Liste für JSON
+        'y_pred': y_pred.tolist(),  # Neu
+        'report': report,
     }
     output_path = PATHS['metrics'] / f'{model_name}_keras_metrics.json'
     with open(output_path, 'w') as f:
