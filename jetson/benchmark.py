@@ -151,11 +151,13 @@ def run_benchmark():
         json.dump(results, f, indent=2)
 
     # Zusammenfassung printen
-    print('\n' + '─' * 72 + '\n Zusammenfassung\n' + '─' * 72)
-    print(f"{'Modell':<30} {'ms':>8} {'FPS':>8} {'RAM':>10} {'Größe':>8}")
+    print('\n' + '─' * 85 + '\n Zusammenfassung\n' + '─' * 85)
+    print(f"{'Modell':<30} {'Ø ms':>8} {'±ms':>6} {'FPS':>6} {'Größe':>8} {'RAM':>8} {'CPU':>6}")
+    print('-' * 85)
     for r in results:
         print(
-            f"{r['model']:<30} {r['avg_ms']:>8.1f} {r['fps']:>8.1f} {r['ram_peak_mb']:>8.1f}MB {r['model_size_mb']:>6.1f}MB")
+            f"{r['model']:<30} {r['avg_ms']:>8.1f} {r['std_ms']:>6.2f} {r['fps']:>6.1f} "
+            f"{r['model_size_mb']:>6.1f}MB {r['ram_peak_mb']:>6.1f}MB {r['cpu_percent']:>5.1f}%")
 
 
 if __name__ == '__main__':
