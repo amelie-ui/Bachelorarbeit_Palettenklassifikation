@@ -10,20 +10,10 @@ from data.loader import load_test_dataset
 def preprocess_for_tflite(image, input_details):
     """
     Bereitet ein Bild für TFLite-Inferenz vor.
-    Bei INT8: Skalierung von FP32 auf INT8 über Quantisierungsparameter.
-    Bei FP32/FP16: nur dtype-Konvertierung.
+    Alle Varianten (FP32, FP16, INT8) erwarten FP32-Eingabe —
+    preprocess_input ist im Modell eingebaut.
     """
-    dtype = input_details[0]['dtype']
-
-    if dtype == np.int8:
-        scale, zero_point = input_details[0]['quantization']
-        image = tf.keras.applications.mobilenet_v2.preprocess_input(
-            tf.cast(image, tf.float32)
-        )
-        image = np.round(image.numpy() / scale + zero_point).astype(np.int8)
-    else:
-        image = tf.cast(image, tf.float32).numpy()
-
+    image = tf.cast(image, tf.float32).numpy()
     return np.expand_dims(image, axis=0)
 
 

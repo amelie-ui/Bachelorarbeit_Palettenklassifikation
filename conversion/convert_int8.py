@@ -8,25 +8,24 @@ def get_calibration_dataset(n_images: int = 100):
     """
     Erstellt einen Kalibrierungsdatensatz aus dem Trainingsdatensatz.
     Wird benötigt um Aktivierungsbereiche pro Schicht zu messen.
+    Bilder werden identisch zum Training vorverarbeitet: [0,255] → [-1,1]
 
     Args:
         n_images: Anzahl der Kalibrierungsbilder (Standard: 100)
     """
 
-    # Trainingsdatensatz laden (ohne Split, nur für Kalibrierung)
     dataset = tf.keras.utils.image_dataset_from_directory(
         PATHS['dataset'],
         image_size=DATA['img_size'],
-        batch_size=1,          # Einzelbilder für präzise Messung
+        batch_size=1,
         shuffle=True,
         seed=DATA['seed']
     )
 
-    # Generator-Funktion: LiteRT erwartet einen callable der Batches liefert
     def representative_dataset():
         for images, _ in dataset.take(n_images):
-            # Preprocessing wie im Training: [0,255] → [-1,1]
             image = tf.cast(images, tf.float32)
+            # Kein preprocess_input — Modell normalisiert intern
             yield [image]
 
     return representative_dataset
@@ -34,9 +33,9 @@ def get_calibration_dataset(n_images: int = 100):
 
 def convert_int8(model_name: str = 'baseline'):
     """
-    Konvertiert ein Keras-Modell zu TFLite mit INT8-Quantisierung.
-    Gewichte: FP32 → INT8 (~75% Größenreduktion)
-    Aktivierungen: FP32 → INT8 (erfordert Kalibrierung)
+    Konvertiert ein Keras-Modell zu TFLite mit vollständiger INT8-Quantisierung.
+    Gewichte und Aktivierungen werden auf INT8 quantisiert (~75% Größenreduktion).
+    Der Kalibrierungsdatensatz bestimmt die Aktivierungsbereiche pro Schicht.
 
     Args:
         model_name: 'baseline' oder 'augmentation'
@@ -50,17 +49,12 @@ def convert_int8(model_name: str = 'baseline'):
     # ── 2. Konverter mit INT8-Konfiguration ───────────────
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
 
-    # Optimierungsziel: maximale Kompression
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
-
-    # Kalibrierungsdatensatz übergeben
-    # → LiteRT misst Aktivierungsbereiche pro Schicht
     converter.representative_dataset = get_calibration_dataset(n_images=100)
 
-    # Vollständige INT8-Quantisierung erzwingen:
-    # Eingang und Ausgang des Modells ebenfalls auf INT8
+    # Vollständige INT8-Quantisierung: Gewichte + Aktivierungen + Ein-/Ausgabe
     converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-    converter.inference_input_type = tf.int8
+    converter.inference_input_type = tf.float32
     converter.inference_output_type = tf.int8
 
     # ── 3. Konvertierung durchführen ──────────────────────

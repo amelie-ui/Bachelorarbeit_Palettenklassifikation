@@ -7,7 +7,7 @@ from data.loader import load_train_val_datasets
 def build_augmentation():
     return tf.keras.Sequential([
         layers.RandomFlip("horizontal_and_vertical"),
-        #layers.RandomRotation(0.1),
+        layers.RandomRotation(0.1),
         layers.RandomBrightness(0.1),
         layers.RandomContrast(0.1),
         layers.RandomZoom(height_factor=(-0.1, 0.0)),
@@ -31,7 +31,6 @@ def train_augmentation(experiment_name: str = 'augmentation'):
 
     model.compile(
         optimizer=tf.keras.optimizers.legacy.Adam(
-            learning_rate= 0.001
             #TRAINING['learning_rate']
         ),
         loss='sparse_categorical_crossentropy',
@@ -63,4 +62,4 @@ def train_augmentation(experiment_name: str = 'augmentation'):
 
 
 if __name__ == '__main__':
-    train_augmentation('augmentation_ohne_rotation')
+    train_augmentation('augmentation')

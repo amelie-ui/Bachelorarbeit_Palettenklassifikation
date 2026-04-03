@@ -7,21 +7,40 @@ from config import DATA, PATHS
 
 LAYER_NAME = 'out_relu'
 
+LABEL_MAP = {
+    'A_PALLET': 'Klasse A',
+    'B_PALLET': 'Klasse B',
+    'C_PALLET': 'Klasse C',
+}
+
 
 def compute_grad_cam(model, image, class_index):
     base_model = model.get_layer('mobilenetv2_1.00_224')
     last_conv_layer = base_model.get_layer(LAYER_NAME)
 
-    # Teil 1: MobileNetV2 bis out_relu
     last_conv_layer_model = tf.keras.Model(
         base_model.inputs, last_conv_layer.output
     )
 
-    # Teil 2: Klassifikator neu verdrahtet
+    # Layer-Namen dynamisch aus dem Modell holen
+    pooling_layer = next(
+        l for l in model.layers
+        if 'global_average_pooling' in l.name
+    )
+    dropout_layer = next(
+        l for l in model.layers
+        if 'dropout' in l.name
+    )
+    dense_layer = next(
+        l for l in model.layers
+        if 'dense' in l.name
+    )
+
     classifier_input = tf.keras.Input(shape=last_conv_layer.output.shape[1:])
     x = classifier_input
-    for layer_name in ['global_average_pooling2d', 'dropout', 'dense']:
-        x = model.get_layer(layer_name)(x)
+    x = pooling_layer(x)
+    x = dropout_layer(x)
+    x = dense_layer(x)
     classifier_model = tf.keras.Model(classifier_input, x)
 
     image_batch = tf.expand_dims(image, axis=0)
@@ -45,25 +64,25 @@ def compute_grad_cam(model, image, class_index):
     return heatmap
 
 
-def overlay_heatmap(image, heatmap, alpha=0.4):
-    """
-    Legt Heatmap als Jet-Colormap über das Originalbild.
-
-    Args:
-        image:   Originalbild (224, 224, 3) als uint8
-        heatmap: Grad-CAM Heatmap (224, 224) in [0, 1]
-        alpha:   Transparenz der Heatmap (0=unsichtbar, 1=vollständig)
-
-    Returns:
-        overlay: Überlagertes Bild als uint8
-    """
+def overlay_heatmap(image, heatmap, alpha=0.6):
     colormap = cm.get_cmap('jet')
-    heatmap_colored = colormap(heatmap)[..., :3]
-    heatmap_colored = (heatmap_colored * 255).astype(np.uint8)
+    heatmap_rgba = colormap(heatmap)
 
-    image_uint8 = image.numpy().astype(np.uint8)
-    overlay = (1 - alpha) * image_uint8 + alpha * heatmap_colored
-    return overlay.astype(np.uint8)
+    # Bild in [0, 255] normalisieren — unabhängig vom Eingabebereich
+    img = image.numpy()
+    if img.max() <= 1.0:
+        img = (img * 255).astype(np.float32)
+    elif img.min() < 0:
+        # preprocess_input Bereich [-1, 1] → [0, 255]
+        img = ((img + 1) / 2 * 255).astype(np.float32)
+    else:
+        img = img.astype(np.float32)
+
+    heatmap_rgb = heatmap_rgba[..., :3] * 255
+    a = (heatmap * alpha)[..., np.newaxis]
+    overlay = (1 - a) * img + a * heatmap_rgb
+
+    return np.clip(overlay, 0, 255).astype(np.uint8)
 
 
 def classify_test_images(model, test_ds):
@@ -98,21 +117,27 @@ def classify_test_images(model, test_ds):
     )
 
 
-def plot_grad_cam_row(axes, image, heatmap, true_label, pred_label, conf):
+def plot_grad_cam_row(axes, image, heatmap, true_label, pred_label, conf,
+                      model_name=None):
     """
-    Zeichnet eine Zeile: Original | Heatmap | Overlay.
-    Wiederverwendbar für alle Notebook-Zellen.
+    Zeichnet eine Zeile: Original | Grad-CAM Overlay.
+    Pred-Info steht im suptitle — Overlay-Titel daher neutral.
+    model_name: z.B. 'Baseline' oder 'Augmentation' — wird als y-Label gesetzt.
     """
     overlay = overlay_heatmap(image, heatmap)
 
-    axes[0].imshow(image.numpy().astype('uint8'))
-    axes[0].set_title(f'Original\nWahr: {true_label}')
+    img = image.numpy()
+    if img.min() < 0:
+        img = ((img + 1) / 2 * 255).astype(np.uint8)
+    else:
+        img = img.astype(np.uint8)
+    axes[0].imshow(img)
+    axes[0].set_title('Original')
     axes[0].axis('off')
 
-    axes[1].imshow(heatmap, cmap='jet')
-    axes[1].set_title('Grad-CAM Heatmap')
+    axes[1].imshow(overlay)
+    axes[1].set_title('Grad-CAM Overlay')
     axes[1].axis('off')
 
-    axes[2].imshow(overlay)
-    axes[2].set_title(f'Overlay\nPred: {pred_label} ({conf:.2%})')
-    axes[2].axis('off')
+    if model_name:
+        axes[0].set_ylabel(model_name, fontsize=11, labelpad=8)
