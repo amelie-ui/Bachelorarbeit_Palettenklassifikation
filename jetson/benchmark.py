@@ -25,7 +25,7 @@ def get_process_ram_mb():
     return round(process.memory_info().rss / (1024 * 1024), 2)
 
 
-def load_test_images(n_images: int = 20): # Hier von 20 auf 3 runter
+def load_test_images(n_images: int = 30): # Hier von 20 auf 3 runter
     from PIL import Image
     images = []
     # WICHTIG: Prüfe, ob der Pfad hier stimmt.
