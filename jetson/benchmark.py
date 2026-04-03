@@ -1,4 +1,7 @@
 # jetson/benchmark.py
+import os
+os.environ['OPENBLAS_CORETYPE'] = 'ARMV8'
+# ...
 import time
 import json
 import numpy as np

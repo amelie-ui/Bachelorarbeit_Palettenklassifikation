@@ -68,33 +68,38 @@ def overlay_heatmap(image, heatmap, alpha=0.6):
     colormap = cm.get_cmap('jet')
     heatmap_rgba = colormap(heatmap)
 
-    # Bild in [0, 255] normalisieren — unabhängig vom Eingabebereich
-    img = image.numpy()
-    if img.max() <= 1.0:
-        img = (img * 255).astype(np.float32)
-    elif img.min() < 0:
-        # preprocess_input Bereich [-1, 1] → [0, 255]
-        img = ((img + 1) / 2 * 255).astype(np.float32)
-    else:
-        img = img.astype(np.float32)
+    # image ist jetzt uint8 numpy array
+    img = image if isinstance(image, np.ndarray) else image.numpy()
+    img = np.clip(img, 0, 255).astype(np.float32)
 
-    heatmap_rgb = heatmap_rgba[..., :3] * 255
+    heatmap_rgb = heatmap_rgba[..., :3] * 255.0
     a = (heatmap * alpha)[..., np.newaxis]
     overlay = (1 - a) * img + a * heatmap_rgb
 
     return np.clip(overlay, 0, 255).astype(np.uint8)
 
 
-def classify_test_images(model, test_ds):
-    """
-    Klassifiziert alle Bilder im Testdatensatz.
+def plot_grad_cam_row(axes, image, heatmap, true_label, pred_label, conf,
+                      model_name=None):
+    overlay = overlay_heatmap(image, heatmap)
 
-    Returns:
-        images_list:  Liste aller Bilder als Tensoren
-        y_true:       Wahre Labels
-        y_pred:       Vorhergesagte Labels
-        confidences:  Max. Softmax-Wert je Bild
-    """
+    # image ist uint8 numpy array — kein .numpy() nötig
+    img = image if isinstance(image, np.ndarray) else image.numpy()
+    img = np.clip(img, 0, 255).astype(np.uint8)
+
+    axes[0].imshow(img)
+    axes[0].set_title('Original')
+    axes[0].axis('off')
+
+    axes[1].imshow(overlay)
+    axes[1].set_title('Grad-CAM Overlay')
+    axes[1].axis('off')
+
+    if model_name:
+        axes[0].set_ylabel(model_name, fontsize=11, labelpad=8)
+
+
+def classify_test_images(model, test_ds):
     images_list = []
     y_true      = []
     y_pred      = []
@@ -104,7 +109,10 @@ def classify_test_images(model, test_ds):
         img  = image[0]
         pred = model.predict(tf.expand_dims(img, 0), verbose=0)[0]
 
-        images_list.append(img)
+        # Direkt als uint8 speichern — verhindert matplotlib float-Problem
+        img_uint8 = np.clip(img.numpy(), 0, 255).astype(np.uint8)
+
+        images_list.append(img_uint8)
         y_true.append(label.numpy()[0])
         y_pred.append(np.argmax(pred))
         confidences.append(np.max(pred))
@@ -117,27 +125,3 @@ def classify_test_images(model, test_ds):
     )
 
 
-def plot_grad_cam_row(axes, image, heatmap, true_label, pred_label, conf,
-                      model_name=None):
-    """
-    Zeichnet eine Zeile: Original | Grad-CAM Overlay.
-    Pred-Info steht im suptitle — Overlay-Titel daher neutral.
-    model_name: z.B. 'Baseline' oder 'Augmentation' — wird als y-Label gesetzt.
-    """
-    overlay = overlay_heatmap(image, heatmap)
-
-    img = image.numpy()
-    if img.min() < 0:
-        img = ((img + 1) / 2 * 255).astype(np.uint8)
-    else:
-        img = img.astype(np.uint8)
-    axes[0].imshow(img)
-    axes[0].set_title('Original')
-    axes[0].axis('off')
-
-    axes[1].imshow(overlay)
-    axes[1].set_title('Grad-CAM Overlay')
-    axes[1].axis('off')
-
-    if model_name:
-        axes[0].set_ylabel(model_name, fontsize=11, labelpad=8)
