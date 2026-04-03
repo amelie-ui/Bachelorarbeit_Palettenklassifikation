@@ -25,25 +25,23 @@ def get_process_ram_mb():
     return round(process.memory_info().rss / (1024 * 1024), 2)
 
 
-def load_test_images(n_images: int = 20):
-    """
-    Lädt n_images Testbilder als numpy-Arrays.
-    Kein TF-Dataset auf Jetson – direktes Laden via Pillow.
-    """
+def load_test_images(n_images: int = 3): # Hier von 20 auf 3 runter
     from PIL import Image
-
     images = []
+    # WICHTIG: Prüfe, ob der Pfad hier stimmt.
+    # Da dein Ordner 'dataset_test' heißt, muss das in der config.py auch so stehen!
     test_path = PATHS['dataset_test']
 
     for class_dir in sorted(test_path.iterdir()):
         if not class_dir.is_dir():
             continue
-        for img_path in sorted(class_dir.glob('*.jpg'))[:n_images // 3]:
+        # Wir nehmen nur 1 Bild pro Klasse für den ersten Test
+        for img_path in sorted(class_dir.glob('*.jpg'))[:1]:
             img = Image.open(img_path).resize(DATA['img_size'])
-            img_array = np.array(img, dtype=np.float32)
+            img_array = np.array(img, dtype=np.float32) / 255.0 # Normalisierung direkt hier
             images.append(img_array)
 
-    print(f'Geladene Testbilder: {len(images)}')
+    print(f'Erfolgreich geladen: {len(images)} Testbilder.')
     return images
 
 
