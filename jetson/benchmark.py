@@ -65,7 +65,14 @@ def benchmark_model(tflite_path: str, images: list, n_warmup: int = 5):
     Returns:
         dict mit Metriken
     """
-    interpreter = tflite.Interpreter(model_path=tflite_path)
+    interpreter = tflite.Interpreter(
+        model_path=str(model_path),
+        num_threads=1  # Reduziert den Overhead massiv
+    )
+    # WICHTIG: Manchmal hilft ein kleiner Delay vor allocate_tensors
+    import time
+    time.sleep(0.5)
+    interpreter.allocate_tensors()
     interpreter.allocate_tensors()
 
     input_details  = interpreter.get_input_details()
