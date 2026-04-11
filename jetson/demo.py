@@ -1,6 +1,7 @@
 import os
 import time
 import sys
+import threading
 import numpy as np
 from pathlib import Path
 
@@ -25,21 +26,17 @@ import cv2
 from PIL import Image
 
 # ── Konfiguration ─────────────────────────────────────────────────────────────
-# Modell hier anpassen – einfach den Schlüssel ändern:
-# 'baseline_fp32', 'baseline_fp16', 'baseline_int8',
-# 'augmentation_fp32', 'augmentation_fp16', 'augmentation_int8'
-MODEL_KEY = 'baseline_fp32'
-
-# Wie viele Sekunden die LED nach der Klassifikation leuchten soll
+MODEL_KEY       = 'baseline_fp32'
 LED_ON_DURATION = 3.0
+NUM_THREADS     = 2
 
-# Anzahl CPU-Threads für TFLite-Inferenz (1, 2 oder 4)
-NUM_THREADS = 2
+# Auf True setzen für Livestream im Browser
+# Lokal:      http://<jetson-ip>:5000
+# SSH-Tunnel: ssh -L 5000:localhost:5000 amelie@192.168.178.150
+#             → dann http://localhost:5000 im Browser
+ENABLE_STREAM   = False
+STREAM_PORT     = 5000
 
-# Stream deaktiviert – auf True setzen um Flask-Livestream zu aktivieren
-ENABLE_STREAM = False
-
-# Verfügbare Modelle
 AVAILABLE_MODELS = {
     'baseline_fp32':     'baseline_fp32.tflite',
     'baseline_fp16':     'baseline_fp16.tflite',
@@ -49,38 +46,34 @@ AVAILABLE_MODELS = {
     'augmentation_int8': 'augmentation_int8.tflite',
 }
 
-# ── RGB-LED Pin-Belegung (BOARD-Schema = physische Pinnummern) ────────────────
-PIN_LED_R = 15   # physischer Pin 15 → Rot   (Klasse C)
-PIN_LED_G = 12   # physischer Pin 12 → Grün  (Klasse A)
-PIN_LED_B = 18   # physischer Pin 18 → Blau  (Klasse B)
+# ── RGB-LED Pin-Belegung (BOARD-Schema) ───────────────────────────────────────
+PIN_LED_R = 15
+PIN_LED_G = 12
+PIN_LED_B = 18
 
-# Mapping: Klassenindex → GPIO-Pin
-# Index 0 = Klasse A (grün), 1 = Klasse B (blau), 2 = Klasse C (rot)
 LED_PINS    = {0: PIN_LED_G, 1: PIN_LED_B, 2: PIN_LED_R}
 CLASS_NAMES = {0: 'A', 1: 'B', 2: 'C'}
+
+# ── Globaler Frame-Buffer für den Stream ──────────────────────────────────────
+latest_frame = None
+frame_lock   = threading.Lock()
 
 
 # ── GPIO ──────────────────────────────────────────────────────────────────────
 
 def setup_gpio():
-    """Initialisiert die drei LED-Pins im BOARD-Schema."""
     GPIO.setmode(GPIO.BOARD)
     for pin in LED_PINS.values():
         GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
 
 
 def all_leds_off():
-    """Schaltet alle drei Farbkanäle aus."""
     if ON_JETSON:
         for pin in LED_PINS.values():
             GPIO.output(pin, GPIO.LOW)
 
 
 def signal_result(class_index: int):
-    """
-    Leuchtet die zur Klasse gehörige Farbe für LED_ON_DURATION Sekunden.
-    Schaltet vorher alle anderen Farben aus.
-    """
     all_leds_off()
     if ON_JETSON:
         GPIO.output(LED_PINS[class_index], GPIO.HIGH)
@@ -92,29 +85,86 @@ def signal_result(class_index: int):
         time.sleep(LED_ON_DURATION)
 
 
+# ── Livestream ────────────────────────────────────────────────────────────────
+
+def start_stream_server():
+    try:
+        from flask import Flask, Response
+    except ImportError:
+        print("FEHLER: Flask nicht installiert. Bitte: pip install flask")
+        return
+
+    app = Flask(__name__)
+
+    def generate_frames():
+        while True:
+            with frame_lock:
+                frame = latest_frame
+            if frame is None:
+                time.sleep(0.05)
+                continue
+            import io
+            buf = io.BytesIO()
+            frame.save(buf, format='JPEG', quality=85)
+            yield (
+                b'--frame\r\n'
+                b'Content-Type: image/jpeg\r\n\r\n'
+                + buf.getvalue() +
+                b'\r\n'
+            )
+            time.sleep(0.04)  # ~25 FPS
+
+    @app.route('/')
+    def index():
+        return f"""
+        <html>
+        <head>
+            <title>Palettenklassifikation – Live</title>
+            <style>
+                body {{ background: #111; color: #eee; font-family: sans-serif;
+                        display: flex; flex-direction: column; align-items: center;
+                        padding: 2rem; }}
+                img  {{ border: 2px solid #444; border-radius: 8px; max-width: 640px; }}
+            </style>
+        </head>
+        <body>
+            <h1>Palette Classification – Live</h1>
+            <img src="/stream" />
+            <p>Modell: {AVAILABLE_MODELS[MODEL_KEY]} | Threads: {NUM_THREADS}</p>
+        </body>
+        </html>
+        """
+
+    @app.route('/stream')
+    def stream():
+        return Response(
+            generate_frames(),
+            mimetype='multipart/x-mixed-replace; boundary=frame'
+        )
+
+    thread = threading.Thread(
+        target=lambda: app.run(host='0.0.0.0', port=STREAM_PORT, debug=False, use_reloader=False),
+        daemon=True
+    )
+    thread.start()
+    print(f"Stream aktiv → http://192.168.178.150:{STREAM_PORT}")
+    print(f"SSH-Tunnel:    ssh -L {STREAM_PORT}:localhost:{STREAM_PORT} amelie@192.168.178.150")
+    print(f"Dann im Browser: http://localhost:{STREAM_PORT}")
+
+
 # ── Kamera ────────────────────────────────────────────────────────────────────
 
-def capture_image():
-    """
-    Nimmt ein einzelnes Bild von der Kamera auf (/dev/video0).
-    Gibt ein PIL-Image zurück, das direkt für die Inferenz verwendet wird.
-    """
-    cap = cv2.VideoCapture(0)
-
-    if not cap.isOpened():
-        raise RuntimeError("Kamera konnte nicht geöffnet werden (/dev/video0).")
+def capture_image(cap):
+    """Verwirft 5 Buffer-Frames damit das Bild wirklich aktuell ist."""
+    for _ in range(5):
+        cap.grab()
 
     ret, frame = cap.read()
-    cap.release()
-
     if not ret:
         raise RuntimeError("Kein Bild von der Kamera erhalten.")
 
-    # OpenCV liefert BGR → PIL erwartet RGB
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(frame_rgb)
-
-    # Auf Modell-Eingabegröße skalieren (224×224)
     pil_image = pil_image.resize(DATA['img_size'])
     return pil_image
 
@@ -122,7 +172,6 @@ def capture_image():
 # ── Modell & Inferenz ─────────────────────────────────────────────────────────
 
 def load_interpreter():
-    """Lädt den TFLite-Interpreter anhand von MODEL_KEY."""
     if MODEL_KEY not in AVAILABLE_MODELS:
         raise ValueError(f"Unbekanntes Modell: '{MODEL_KEY}'")
 
@@ -140,35 +189,53 @@ def load_interpreter():
 
 
 def classify(interpreter, pil_image) -> tuple:
-    """Einzelne TFLite-Inferenz – gibt Klassenindex und Konfidenz zurück."""
     input_details  = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
-    # Normalisierung auf [0, 1] und Batch-Dimension hinzufügen
     image_array = np.array(pil_image, dtype=np.float32) / 255.0
     img_input   = np.expand_dims(image_array, axis=0)
 
     interpreter.set_tensor(input_details[0]['index'], img_input)
     interpreter.invoke()
 
-    probabilities = interpreter.get_tensor(output_details[0]['index'])[0]
-    class_index   = int(np.argmax(probabilities))
-    confidence    = float(np.max(probabilities))
+    output_detail = output_details[0]
+    raw_output    = interpreter.get_tensor(output_detail['index'])[0]
+
+    # INT8-Dequantisierung falls nötig
+    if output_detail['dtype'] == np.int8:
+        scale, zero_point = output_detail['quantization']
+        probabilities = (raw_output.astype(np.float32) - zero_point) * scale
+    else:
+        probabilities = raw_output
+
+    class_index = int(np.argmax(probabilities))
+    confidence  = float(np.max(probabilities))
     return class_index, confidence
 
 
 # ── Hauptschleife ─────────────────────────────────────────────────────────────
 
 def run_demo():
+    global latest_frame
+
     interpreter = load_interpreter()
 
     if ON_JETSON:
         setup_gpio()
 
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        raise RuntimeError("Kamera konnte nicht geöffnet werden (/dev/video0).")
+    print("Kamera bereit.")
+
+    if ENABLE_STREAM:
+        start_stream_server()
+
     print("\n" + "=" * 50)
     print("  Palettenklassifikation – Demo")
     print(f"  Modell:  {AVAILABLE_MODELS[MODEL_KEY]}")
     print(f"  Threads: {NUM_THREADS}")
+    print(f"  Stream:  {'aktiv auf Port ' + str(STREAM_PORT) if ENABLE_STREAM else 'deaktiviert'}")
     print("  Enter drücken = neue Klassifikation starten.")
     print("  Beenden mit Strg+C")
     print("=" * 50 + "\n")
@@ -178,25 +245,27 @@ def run_demo():
             input("  Drücke Enter für nächste Klassifikation > ")
             print("── Klassifikation ──────────────────────────────")
 
-            # Bild von Kamera aufnehmen
-            pil_image = capture_image()
+            pil_image = capture_image(cap)
 
-            # Klassifikation
+            # Frame in Stream-Buffer schreiben
+            if ENABLE_STREAM:
+                with frame_lock:
+                    latest_frame = pil_image
+
             t0 = time.perf_counter()
             class_index, confidence = classify(interpreter, pil_image)
             duration_ms = (time.perf_counter() - t0) * 1000
 
             predicted = CLASS_NAMES[class_index]
-
             print(f"  Ergebnis:  Klasse {predicted}  ({confidence*100:.1f}% Konfidenz)")
             print(f"  Inferenz:  {duration_ms:.1f} ms\n")
 
-            # LED-Feedback
             signal_result(class_index)
 
     except KeyboardInterrupt:
         print("\nDemo beendet.")
     finally:
+        cap.release()
         all_leds_off()
         if ON_JETSON:
             GPIO.cleanup()
