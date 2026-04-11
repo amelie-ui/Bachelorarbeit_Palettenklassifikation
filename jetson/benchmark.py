@@ -4,19 +4,62 @@ import json
 import numpy as np
 import sys
 import psutil
+import subprocess
 from pathlib import Path
 
-# Umgebungsvariable für Jetson Nano Stabilität
 os.environ['OPENBLAS_CORETYPE'] = 'ARMV8'
 
-# Pfad-Setup
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from config import DATA, PATHS
 
 try:
     import tflite_runtime.interpreter as tflite
+    import tflite_runtime
+
+    TFLITE_VERSION = tflite_runtime.__version__
 except ImportError:
     import tensorflow.lite as tflite
+    import tensorflow as tf
+
+    TFLITE_VERSION = tf.__version__
+
+
+def collect_system_info() -> dict:
+    """
+    Liest Systemumgebung für den Thesis-Abschnitt 'Systemumgebung' aus.
+    Gibt JetPack-Version, Python-Version, RAM, CPU-Kerne und tflite_runtime zurück.
+    """
+    info = {}
+
+    # JetPack-Version aus NVIDIA-Tegra-Release-Datei
+    try:
+        tegra = Path('/etc/nv_tegra_release').read_text()
+        # Erste Zeile enthält z.B. "# R32 (release), REVISION: 7.1, ..."
+        info['jetpack_tegra_release'] = tegra.strip().split('\n')[0]
+    except FileNotFoundError:
+        info['jetpack_tegra_release'] = 'Nicht verfügbar (nicht auf Jetson?)'
+
+    # Ubuntu-Version
+    try:
+        info['os'] = Path('/etc/os-release').read_text().split('\n')[0]
+    except FileNotFoundError:
+        info['os'] = 'Unbekannt'
+
+    # Python-Version
+    info['python_version'] = sys.version.split(' ')[0]
+
+    # tflite_runtime-Version
+    info['tflite_runtime_version'] = TFLITE_VERSION
+
+    # RAM gesamt
+    ram_total = psutil.virtual_memory().total / (1024 ** 3)
+    info['ram_total_gb'] = round(ram_total, 2)
+
+    # CPU-Kerne
+    info['cpu_cores_physical'] = psutil.cpu_count(logical=False)
+    info['cpu_cores_logical'] = psutil.cpu_count(logical=True)
+
+    return info
 
 
 def get_process_ram_mb():
@@ -28,27 +71,22 @@ def get_process_ram_mb():
 def load_test_images(n_images: int = 30):
     """
     Lädt Bilder gleichmäßig verteilt aus den Klassenordnern.
-    Verhindert den '[:1]' Fehler, der nur 3 Bilder gesamt geladen hat.
     """
     from PIL import Image
     images = []
     test_path = PATHS['dataset_test']
 
-    # Klassenordner identifizieren (A, B, C)
     classes = [d for d in sorted(test_path.iterdir()) if d.is_dir()]
     if not classes:
         print("FEHLER: Keine Klassenordner in dataset_test gefunden!")
         return []
 
-    # Bilder pro Klasse berechnen für gleichmäßige Verteilung
     imgs_per_class = n_images // len(classes)
 
     for class_dir in classes:
         all_imgs = sorted(list(class_dir.glob('*.jpg')))
-        # Nimm imgs_per_class Bilder aus diesem Ordner
         for img_path in all_imgs[:imgs_per_class]:
             img = Image.open(img_path).resize(DATA['img_size'])
-            # Normalisierung auf [0, 1]
             img_array = np.array(img, dtype=np.float32) / 255.0
             images.append(img_array)
 
@@ -61,16 +99,20 @@ def preprocess(image):
     return np.expand_dims(image.astype(np.float32), axis=0)
 
 
-def benchmark_model(tflite_path: str, images: list, n_warmup: int = 5):
-    """Benchmarkt ein TFLite-Modell auf dem Jetson Nano."""
+def benchmark_model(tflite_path: str, images: list, n_warmup: int = 5, num_threads: int = 2):
+    """
+    Benchmarkt ein TFLite-Modell.
 
-    # Interpreter Setup
+    num_threads: Anzahl CPU-Kerne für die TFLite-Inferenz.
+    Empfehlung für MobileNetV2 auf Jetson Nano: 2 (oft besser als 4,
+    da der thread-synchronization overhead bei kleinen Modellen dominiert).
+    """
+
     interpreter = tflite.Interpreter(
         model_path=str(tflite_path),
-        num_threads=1  # Stabilisiert die CPU-Last auf dem Nano
+        num_threads=num_threads
     )
 
-    # Kleiner Puffer für den RAM-Load
     time.sleep(0.2)
     interpreter.allocate_tensors()
 
@@ -78,17 +120,16 @@ def benchmark_model(tflite_path: str, images: list, n_warmup: int = 5):
     output_details = interpreter.get_output_details()
     input_index = input_details[0]['index']
 
-    # ── Warmup (Nicht gemessen) ───────────────────────────
+    # ── Warmup ───────────────────────────────────────────
     print(f'  Warmup ({n_warmup} Durchläufe)...')
     for i in range(n_warmup):
         img = preprocess(images[i % len(images)])
         interpreter.set_tensor(input_index, img)
         interpreter.invoke()
 
-    # ── Messung ───────────────────────────────────────────
-    print(f'  Messe {len(images)} Bilder...')
+    # ── Messung ──────────────────────────────────────────
+    print(f'  Messe {len(images)} Bilder (num_threads={num_threads})...')
 
-    # CPU-Messung resetten
     psutil.cpu_percent(percpu=True, interval=None)
     inference_times = []
 
@@ -101,15 +142,15 @@ def benchmark_model(tflite_path: str, images: list, n_warmup: int = 5):
         duration_ms = (time.perf_counter() - start) * 1000
         inference_times.append(duration_ms)
 
-    # Metriken erfassen
     ram_peak = get_process_ram_mb()
     cpu_cores = psutil.cpu_percent(percpu=True, interval=None)
-    cpu_max = max(cpu_cores)  # Höchste Last auf einem Kern
+    cpu_max = max(cpu_cores)
 
     avg_ms = float(np.mean(inference_times))
 
     return {
         'model': os.path.basename(tflite_path),
+        'num_threads': num_threads,
         'avg_ms': round(avg_ms, 2),
         'std_ms': round(float(np.std(inference_times)), 2),
         'min_ms': round(float(np.min(inference_times)), 2),
@@ -121,10 +162,17 @@ def benchmark_model(tflite_path: str, images: list, n_warmup: int = 5):
     }
 
 
-def run_benchmark():
-    # Hier kannst du die Anzahl für die Thesis auf z.B. 30 setzen
+def run_benchmark(num_threads: int = 2):
+    # Systeminfo einmal zu Beginn sammeln und ausgeben
+    print('\n══ Systemumgebung ══════════════════════════════════')
+    sys_info = collect_system_info()
+    for k, v in sys_info.items():
+        print(f'  {k}: {v}')
+    print('════════════════════════════════════════════════════\n')
+
     images = load_test_images(n_images=30)
-    if not images: return
+    if not images:
+        return
 
     results = []
     models = [
@@ -140,17 +188,17 @@ def run_benchmark():
             continue
 
         print(f'\n── {model_file} ──────────────────────────────')
-        result = benchmark_model(str(tflite_path), images)
+        result = benchmark_model(str(tflite_path), images, num_threads=num_threads)
         results.append(result)
 
         print(f"  Ø {result['avg_ms']} ms | FPS: {result['fps']} | RAM: {result['ram_peak_mb']}MB")
 
-    # Ergebnisse speichern
+    # Systeminfo mit in die JSON speichern
+    output = {'system_info': sys_info, 'results': results}
     output_path = PATHS['metrics'] / 'jetson_benchmark.json'
     with open(output_path, 'w') as f:
-        json.dump(results, f, indent=2)
+        json.dump(output, f, indent=2)
 
-    # Zusammenfassung printen
     print('\n' + '─' * 85 + '\n Zusammenfassung\n' + '─' * 85)
     print(f"{'Modell':<30} {'Ø ms':>8} {'±ms':>6} {'FPS':>6} {'Größe':>8} {'RAM':>8} {'CPU':>6}")
     print('-' * 85)
@@ -161,4 +209,5 @@ def run_benchmark():
 
 
 if __name__ == '__main__':
-    run_benchmark()
+    # Hier num_threads anpassen (1, 2 oder 4) – dann Ergebnisse vergleichen
+    run_benchmark(num_threads=2)
