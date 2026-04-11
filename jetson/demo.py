@@ -28,7 +28,7 @@ from PIL import Image
 # Modell hier anpassen – einfach den Schlüssel ändern:
 # 'baseline_fp32', 'baseline_fp16', 'baseline_int8',
 # 'augmentation_fp32', 'augmentation_fp16', 'augmentation_int8'
-MODEL_KEY = 'baseline_int8'
+MODEL_KEY = 'baseline_fp32'
 
 # Wie viele Sekunden die LED nach der Klassifikation leuchten soll
 LED_ON_DURATION = 3.0
