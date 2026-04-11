@@ -8,9 +8,9 @@ except ImportError:
     ON_JETSON = False
 
 # ── Pins (BCM-Schema) ────────────────────────────────────────────────────────
-PIN_LED_R = 12   # physischer Pin 12
-PIN_LED_G = 15   # physischer Pin 15
-PIN_LED_B = 18
+PIN_LED_R = 18   # Pin 18 → leuchtet blau  → rotes Bein hier einstecken
+PIN_LED_G = 12   # Pin 12 → leuchtet grün  → stimmt bereits
+PIN_LED_B = 15   # Pin 15 → leuchtet nichts → hier prüfenp
 
 PINS = {
     'ROT   (Klasse C)': PIN_LED_R,
