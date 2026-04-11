@@ -8,9 +8,9 @@ except ImportError:
     ON_JETSON = False
 
 # ── Pins (BCM-Schema) ────────────────────────────────────────────────────────
-PIN_LED_R = 18
-PIN_LED_G = 22
-PIN_LED_B = 24
+PIN_LED_R = 12   # physischer Pin 12
+PIN_LED_G = 15   # physischer Pin 15
+PIN_LED_B = 18
 
 PINS = {
     'ROT   (Klasse C)': PIN_LED_R,
