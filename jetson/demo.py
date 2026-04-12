@@ -188,7 +188,7 @@ def capture_image(cap, mode: str):
         if not all_images:
             raise FileNotFoundError("Keine Testbilder gefunden – Datensatz auf Jetson übertragen?")
         img_path   = random.choice(all_images)
-        true_label = img_path.parent.name
+        true_label = img_path.parent.name[0]
         print(f"  Testbild: {img_path.name}  (Klasse: {true_label})")
         pil_image  = Image.open(img_path).resize(DATA['img_size'])
     else:
