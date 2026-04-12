@@ -29,7 +29,7 @@ from PIL import Image
 
 # ── Konfiguration ─────────────────────────────────────────────────────────────
 MODEL_KEY        = 'baseline_fp32'
-LED_ON_DURATION  = 3.0
+LED_ON_DURATION  = 1.0
 NUM_THREADS      = 2
 
 # Stream: auf True setzen für Livestream im Browser
@@ -78,15 +78,18 @@ def all_leds_off():
 
 
 def signal_result(class_index: int):
-    all_leds_off()
-    if ON_JETSON:
-        GPIO.output(LED_PINS[class_index], GPIO.HIGH)
-        time.sleep(LED_ON_DURATION)
-        GPIO.output(LED_PINS[class_index], GPIO.LOW)
-    else:
-        color = {0: 'GRÜN', 1: 'BLAU', 2: 'ROT'}[class_index]
-        print(f"  [SIM] LED leuchtet {color} für {LED_ON_DURATION}s.")
-        time.sleep(LED_ON_DURATION)
+    """LED leuchtet in einem separaten Thread – blockiert die Hauptschleife nicht."""
+    def blink():
+        all_leds_off()
+        if ON_JETSON:
+            GPIO.output(LED_PINS[class_index], GPIO.HIGH)
+            time.sleep(LED_ON_DURATION)
+            GPIO.output(LED_PINS[class_index], GPIO.LOW)
+        else:
+            color = {0: 'GRÜN', 1: 'BLAU', 2: 'ROT'}[class_index]
+            print(f"  [SIM] LED leuchtet {color} für {LED_ON_DURATION}s.")
+
+    threading.Thread(target=blink, daemon=True).start()
 
 
 # ── Livestream ────────────────────────────────────────────────────────────────
