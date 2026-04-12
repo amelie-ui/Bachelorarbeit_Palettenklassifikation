@@ -210,4 +210,4 @@ def run_benchmark(num_threads: int = 2):
 
 if __name__ == '__main__':
     # Hier num_threads anpassen (1, 2 oder 4) – dann Ergebnisse vergleichen
-    run_benchmark(num_threads=2)
+    run_benchmark(num_threads=4)
