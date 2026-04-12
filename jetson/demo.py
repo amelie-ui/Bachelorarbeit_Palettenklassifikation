@@ -31,15 +31,10 @@ from PIL import Image
 MODEL_KEY        = 'baseline_fp32'
 LED_ON_DURATION  = 1.0
 NUM_THREADS      = 2
-
-# Stream: auf True setzen für Livestream im Browser
-# Lokal:      http://192.168.178.150:5000
-# SSH-Tunnel: ssh -L 5000:localhost:5000 amelie@192.168.178.150
 ENABLE_STREAM    = True
 STREAM_PORT      = 5000
-
-# Bildquelle: True = Testbilder aus Datensatz, False = Kamera live
 USE_TEST_IMAGES  = False
+
 AVAILABLE_MODELS = {
     'baseline_fp32':     'baseline_fp32.tflite',
     'baseline_fp16':     'baseline_fp16.tflite',
@@ -50,16 +45,15 @@ AVAILABLE_MODELS = {
 }
 
 # ── RGB-LED Pin-Belegung (BOARD-Schema) ───────────────────────────────────────
-PIN_LED_R = 15   # Rot  → Klasse C
-PIN_LED_G = 12   # Grün → Klasse A
-PIN_LED_B = 18   # Blau → Klasse B
+PIN_LED_R = 15
+PIN_LED_G = 12
+PIN_LED_B = 18
 
 LED_PINS    = {0: PIN_LED_G, 1: PIN_LED_B, 2: PIN_LED_R}
 CLASS_NAMES = {0: 'A', 1: 'B', 2: 'C'}
 
-# ── Globaler Frame-Buffer für den Stream ──────────────────────────────────────
-latest_frame = None
-frame_lock   = threading.Lock()
+# ── Kamera-Lock: verhindert gleichzeitigen Zugriff von Stream und Klassifikation
+camera_lock = threading.Lock()
 
 
 # ── GPIO ──────────────────────────────────────────────────────────────────────
@@ -77,7 +71,6 @@ def all_leds_off():
 
 
 def signal_result(class_index: int):
-    """LED leuchtet in einem separaten Thread – blockiert die Hauptschleife nicht."""
     def blink():
         all_leds_off()
         if ON_JETSON:
@@ -87,37 +80,35 @@ def signal_result(class_index: int):
         else:
             color = {0: 'GRÜN', 1: 'BLAU', 2: 'ROT'}[class_index]
             print(f"  [SIM] LED leuchtet {color} für {LED_ON_DURATION}s.")
-
     threading.Thread(target=blink, daemon=True).start()
 
 
 # ── Livestream ────────────────────────────────────────────────────────────────
 
-def start_stream_server():
+def start_stream_server(cap):
     try:
         from flask import Flask, Response
     except ImportError:
-        print("FEHLER: Flask nicht installiert – pip install flask")
+        print("FEHLER: Flask nicht installiert.")
         return
 
     app = Flask(__name__)
 
     def generate_frames():
+        """Liest direkt aus cap – immer aktuelles Bild, kein Buffer."""
         while True:
-            with frame_lock:
-                frame = latest_frame
-            if frame is None:
+            with camera_lock:
+                ret, frame = cap.read()
+            if not ret:
                 time.sleep(0.05)
                 continue
-            buf = io.BytesIO()
-            frame.save(buf, format='JPEG', quality=85)
+            _, buffer = cv2.imencode('.jpg', frame)
             yield (
                 b'--frame\r\n'
                 b'Content-Type: image/jpeg\r\n\r\n'
-                + buf.getvalue() +
+                + buffer.tobytes() +
                 b'\r\n'
             )
-            time.sleep(0.04)
 
     @app.route('/')
     def index():
@@ -129,8 +120,7 @@ def start_stream_server():
                 body {{ background: #111; color: #eee; font-family: sans-serif;
                         display: flex; flex-direction: column; align-items: center;
                         padding: 2rem; }}
-                img  {{ border: 2px solid #444; border-radius: 8px;
-                        width: 640px; height: auto; }}
+                img  {{ border: 2px solid #444; border-radius: 8px; width: 640px; height: auto; }}
             </style>
         </head>
         <body>
@@ -143,54 +133,28 @@ def start_stream_server():
 
     @app.route('/stream')
     def stream():
-        response = Response(
+        return Response(
             generate_frames(),
             mimetype='multipart/x-mixed-replace; boundary=frame'
         )
-        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
-        return response
 
     thread = threading.Thread(
-        target=lambda: app.run(host='0.0.0.0', port=STREAM_PORT, debug=False, use_reloader=False),
+        target=lambda: app.run(
+            host='0.0.0.0',
+            port=STREAM_PORT,
+            debug=False,
+            use_reloader=False,
+            threaded=True   # ← wichtig: jeder Browser-Request bekommt eigenen Thread
+        ),
         daemon=True
     )
     thread.start()
     print(f"Stream aktiv → http://192.168.178.150:{STREAM_PORT}")
-    print(f"SSH-Tunnel:   ssh -L {STREAM_PORT}:localhost:{STREAM_PORT} amelie@192.168.178.150")
-
-
-def start_camera_stream_thread(cap):
-    """
-    Hintergrund-Thread: liest kontinuierlich Frames von der Kamera
-    und schreibt sie in latest_frame für den Stream.
-    Läuft unabhängig vom Enter-Trigger — der Browser zeigt immer
-    das aktuelle Kamerabild, auch zwischen Klassifikationen.
-    """
-    global latest_frame
-
-    def loop():
-        while True:
-            try:
-                ret, frame = cap.read()
-                if ret:
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    pil_image = Image.fromarray(frame_rgb).resize((640, 480))
-                    with frame_lock:
-                        latest_frame = pil_image
-                time.sleep(0.04)  # ~25 FPS
-            except Exception:
-                break
-
-    thread = threading.Thread(target=loop, daemon=True)
-    thread.start()
 
 
 # ── Kamera ────────────────────────────────────────────────────────────────────
 
 def open_camera():
-    """Öffnet GStreamer-Pipeline (Raspberry Pi Kamera), Fallback auf /dev/video0."""
     pipeline = (
         "nvarguscamerasrc ! "
         "video/x-raw(memory:NVMM), width=640, height=480, format=NV12, framerate=30/1 ! "
@@ -222,20 +186,14 @@ def capture_image(cap, mode: str):
         img_path   = random.choice(all_images)
         true_label = img_path.parent.name[0]
         print(f"  Testbild: {img_path.name}  (Klasse: {true_label})")
-        pil_stream  = Image.open(img_path).resize((640, 480))
-        pil_classify = pil_stream.resize(DATA['img_size'])
+        return Image.open(img_path).resize(DATA['img_size'])
     else:
-        if mode == 'v4l2':
-            for _ in range(10):
-                cap.read()
-        ret, frame = cap.read()
+        with camera_lock:
+            ret, frame = cap.read()
         if not ret:
             raise RuntimeError("Kein Bild von der Kamera erhalten.")
-        frame_rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_stream   = Image.fromarray(frame_rgb).resize((640, 480))
-        pil_classify = pil_stream.resize(DATA['img_size'])
-
-    return pil_stream, pil_classify
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(frame_rgb).resize(DATA['img_size'])
 
 
 # ── Modell & Inferenz ─────────────────────────────────────────────────────────
@@ -258,7 +216,6 @@ def classify(interpreter, pil_image) -> tuple:
     input_details  = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
-    # Rohpixelwerte [0, 255] – Normalisierung übernimmt das Modell intern
     img_input = np.expand_dims(np.array(pil_image, dtype=np.float32), axis=0)
     interpreter.set_tensor(input_details[0]['index'], img_input)
     interpreter.invoke()
@@ -266,7 +223,6 @@ def classify(interpreter, pil_image) -> tuple:
     output_detail = output_details[0]
     raw_output    = interpreter.get_tensor(output_detail['index'])[0]
 
-    # INT8-Dequantisierung falls nötig
     if output_detail['dtype'] == np.int8:
         scale, zero_point = output_detail['quantization']
         probabilities = (raw_output.astype(np.float32) - zero_point) * scale
@@ -279,7 +235,6 @@ def classify(interpreter, pil_image) -> tuple:
 # ── Hauptschleife ─────────────────────────────────────────────────────────────
 
 def run_demo():
-    global latest_frame
     interpreter = load_interpreter()
 
     if ON_JETSON:
@@ -288,7 +243,7 @@ def run_demo():
     cap, camera_mode = open_camera()
 
     if ENABLE_STREAM:
-        start_stream_server()
+        start_stream_server(cap)
 
     print("\n" + "=" * 50)
     print("  Palettenklassifikation – Demo")
@@ -303,15 +258,10 @@ def run_demo():
             input("  Drücke Enter > ")
             print("── Klassifikation ──────────────────────────────")
 
-            pil_stream, pil_classify = capture_image(cap, camera_mode)
-
-            # Stream mit großem Bild updaten (640×480)
-            if ENABLE_STREAM:
-                with frame_lock:
-                    latest_frame = pil_stream
+            pil_image = capture_image(cap, camera_mode)
 
             t0 = time.perf_counter()
-            class_index, confidence = classify(interpreter, pil_classify)
+            class_index, confidence = classify(interpreter, pil_image)
             duration_ms = (time.perf_counter() - t0) * 1000
 
             predicted = CLASS_NAMES[class_index]
