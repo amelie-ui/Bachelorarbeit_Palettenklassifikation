@@ -40,7 +40,6 @@ STREAM_PORT      = 5000
 
 # Bildquelle: True = Testbilder aus Datensatz, False = Kamera live
 USE_TEST_IMAGES  = False
-ss
 AVAILABLE_MODELS = {
     'baseline_fp32':     'baseline_fp32.tflite',
     'baseline_fp16':     'baseline_fp16.tflite',
