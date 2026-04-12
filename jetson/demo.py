@@ -8,6 +8,7 @@ import random
 import io
 
 os.environ['OPENBLAS_CORETYPE'] = 'ARMV8'
+CONFIDENCE_THRESHOLD = 0.70
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from config import DATA, PATHS
@@ -33,7 +34,7 @@ LED_ON_DURATION  = 1.0
 NUM_THREADS      = 2
 ENABLE_STREAM    = True
 STREAM_PORT      = 5000
-USE_TEST_IMAGES  = False
+USE_TEST_IMAGES  = True
 
 AVAILABLE_MODELS = {
     'baseline_fp32':     'baseline_fp32.tflite',
@@ -264,8 +265,8 @@ def run_demo():
             class_index, confidence = classify(interpreter, pil_image)
             duration_ms = (time.perf_counter() - t0) * 1000
 
-            predicted = CLASS_NAMES[class_index]
-            print(f"  Ergebnis:  Klasse {predicted}  ({confidence*100:.1f}% Konfidenz)")
+            predicted = CLASS_NAMES[class_index] if confidence >= CONFIDENCE_THRESHOLD else 'Unbekannt'
+            print(f"  Ergebnis:  Klasse {predicted}  ({confidence * 100:.1f}% Konfidenz)")
             print(f"  Inferenz:  {duration_ms:.1f} ms\n")
 
             signal_result(class_index)
