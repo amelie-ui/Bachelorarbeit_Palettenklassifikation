@@ -35,7 +35,7 @@ NUM_THREADS      = 2
 ENABLE_STREAM    = True
 STREAM_PORT      = 5000
 USE_TEST_IMAGES  = True
-
+''
 AVAILABLE_MODELS = {
     'baseline_fp32':     'baseline_fp32.tflite',
     'baseline_fp16':     'baseline_fp16.tflite',
