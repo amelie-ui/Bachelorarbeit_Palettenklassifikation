@@ -143,10 +143,14 @@ def start_stream_server():
 
     @app.route('/stream')
     def stream():
-        return Response(
+        response = Response(
             generate_frames(),
             mimetype='multipart/x-mixed-replace; boundary=frame'
         )
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
 
     thread = threading.Thread(
         target=lambda: app.run(host='0.0.0.0', port=STREAM_PORT, debug=False, use_reloader=False),
