@@ -155,9 +155,9 @@ def start_stream_server():
 # ── Kamera ────────────────────────────────────────────────────────────────────
 
 def capture_image(cap):
-    """Verwirft 5 Buffer-Frames damit das Bild wirklich aktuell ist."""
-    for _ in range(5):
-        cap.grab()
+    """Liest 10 Frames und verwirft sie – nimmt dann den aktuellen Frame."""
+    for _ in range(10):
+        cap.read()  # echte read() statt grab() – leert den Buffer zuverlässig
 
     ret, frame = cap.read()
     if not ret:
