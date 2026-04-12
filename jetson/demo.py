@@ -4,6 +4,7 @@ import sys
 import threading
 import numpy as np
 from pathlib import Path
+import random
 
 os.environ['OPENBLAS_CORETYPE'] = 'ARMV8'
 
@@ -26,11 +27,18 @@ import cv2
 from PIL import Image
 
 # ── Konfiguration ─────────────────────────────────────────────────────────────
-MODEL_KEY       = 'baseline_fp32'
-LED_ON_DURATION = 3.0
-NUM_THREADS     = 2
-ENABLE_STREAM   = False
-STREAM_PORT     = 5000
+MODEL_KEY        = 'baseline_fp32'
+LED_ON_DURATION  = 3.0
+NUM_THREADS      = 2
+
+# Stream: auf True setzen für Livestream im Browser
+# Lokal:      http://192.168.178.150:5000
+# SSH-Tunnel: ssh -L 5000:localhost:5000 amelie@192.168.178.150
+ENABLE_STREAM    = False
+STREAM_PORT      = 5000
+
+# Bildquelle: True = Testbilder aus Datensatz, False = Kamera live
+USE_TEST_IMAGES  = True
 
 AVAILABLE_MODELS = {
     'baseline_fp32':     'baseline_fp32.tflite',
@@ -42,9 +50,9 @@ AVAILABLE_MODELS = {
 }
 
 # ── RGB-LED Pin-Belegung (BOARD-Schema) ───────────────────────────────────────
-PIN_LED_R = 15
-PIN_LED_G = 12
-PIN_LED_B = 18
+PIN_LED_R = 15   # Rot  → Klasse C
+PIN_LED_G = 12   # Grün → Klasse A
+PIN_LED_B = 18   # Blau → Klasse B
 
 LED_PINS    = {0: PIN_LED_G, 1: PIN_LED_B, 2: PIN_LED_R}
 CLASS_NAMES = {0: 'A', 1: 'B', 2: 'C'}
@@ -60,7 +68,6 @@ def setup_gpio():
     GPIO.setmode(GPIO.BOARD)
     for pin in LED_PINS.values():
         GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
-    print("[DEBUG] GPIO initialisiert – Pins:", list(LED_PINS.values()))
 
 
 def all_leds_off():
@@ -77,7 +84,7 @@ def signal_result(class_index: int):
         GPIO.output(LED_PINS[class_index], GPIO.LOW)
     else:
         color = {0: 'GRÜN', 1: 'BLAU', 2: 'ROT'}[class_index]
-        print(f"  [SIM] RGB-LED leuchtet {color} für {LED_ON_DURATION}s.")
+        print(f"  [SIM] LED leuchtet {color} für {LED_ON_DURATION}s.")
         time.sleep(LED_ON_DURATION)
 
 
@@ -87,7 +94,7 @@ def start_stream_server():
     try:
         from flask import Flask, Response
     except ImportError:
-        print("FEHLER: Flask nicht installiert.")
+        print("FEHLER: Flask nicht installiert – pip install flask")
         return
 
     app = Flask(__name__)
@@ -143,17 +150,15 @@ def start_stream_server():
         daemon=True
     )
     thread.start()
-    print(f"[DEBUG] Stream aktiv → http://192.168.178.150:{STREAM_PORT}")
+    print(f"Stream aktiv → http://192.168.178.150:{STREAM_PORT}")
+    print(f"SSH-Tunnel:   ssh -L {STREAM_PORT}:localhost:{STREAM_PORT} amelie@192.168.178.150")
 
 
 # ── Kamera ────────────────────────────────────────────────────────────────────
 
 def open_camera():
-    """
-    Versucht zuerst GStreamer (Raspberry Pi Kamera), dann Fallback auf /dev/video0.
-    Gibt das cap-Objekt und den verwendeten Modus zurück.
-    """
-    gstreamer_pipeline = (
+    """Öffnet GStreamer-Pipeline (Raspberry Pi Kamera), Fallback auf /dev/video0."""
+    pipeline = (
         "nvarguscamerasrc ! "
         "video/x-raw(memory:NVMM), width=224, height=224, format=NV12, framerate=30/1 ! "
         "nvvidconv ! "
@@ -162,53 +167,39 @@ def open_camera():
         "video/x-raw, format=BGR ! "
         "appsink"
     )
-
-    print("[DEBUG] Versuche GStreamer-Pipeline (Raspberry Pi Kamera)...")
-    cap = cv2.VideoCapture(gstreamer_pipeline, cv2.CAP_GSTREAMER)
-
+    cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
     if cap.isOpened():
-        print("[DEBUG] GStreamer-Pipeline erfolgreich geöffnet.")
+        print("Kamera bereit – Modus: GStreamer")
         return cap, 'gstreamer'
 
-    print("[DEBUG] GStreamer fehlgeschlagen – Fallback auf /dev/video0 (USB-Kamera).")
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
     if cap.isOpened():
-        print("[DEBUG] /dev/video0 erfolgreich geöffnet.")
+        print("Kamera bereit – Modus: v4l2")
         return cap, 'v4l2'
 
-    raise RuntimeError("Keine Kamera verfügbar – weder GStreamer noch /dev/video0.")
+    raise RuntimeError("Keine Kamera verfügbar.")
 
 
 def capture_image(cap, mode: str):
-    """
-    Nimmt ein aktuelles Bild auf.
-    Bei v4l2: Buffer leeren via mehrfaches read().
-    Bei GStreamer: direkt lesen, Buffer wird intern verwaltet.
-    """
-    if mode == 'v4l2':
-        # Buffer leeren: 10 Frames verwerfen
-        for _ in range(10):
-            cap.read()
-
-    ret, frame = cap.read()
-
-    if not ret:
-        raise RuntimeError("Kein Bild von der Kamera erhalten.")
-
-    # Debug: Rohbild-Statistiken ausgeben
-    print(f"[DEBUG] Frame shape: {frame.shape}, dtype: {frame.dtype}")
-    print(f"[DEBUG] Pixelwerte – min: {frame.min()}, max: {frame.max()}, mean: {frame.mean():.1f}")
-
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    pil_image = Image.fromarray(frame_rgb)
-    pil_image = pil_image.resize(DATA['img_size'])
-
-    # Bild speichern für visuelle Kontrolle
-    save_path = '/home/amelie/DasWirdGut_IchKannDas/jetson/last_capture.jpg'
-    pil_image.save(save_path)
-    print(f"[DEBUG] Bild gespeichert: {save_path}")
+    """Liefert ein PIL-Image – entweder vom Datensatz oder von der Kamera."""
+    if USE_TEST_IMAGES:
+        all_images = list(PATHS['dataset_test'].rglob('*.jpg'))
+        if not all_images:
+            raise FileNotFoundError("Keine Testbilder gefunden – Datensatz auf Jetson übertragen?")
+        img_path   = random.choice(all_images)
+        true_label = img_path.parent.name
+        print(f"  Testbild: {img_path.name}  (Klasse: {true_label})")
+        pil_image  = Image.open(img_path).resize(DATA['img_size'])
+    else:
+        if mode == 'v4l2':
+            for _ in range(10):
+                cap.read()
+        ret, frame = cap.read()
+        if not ret:
+            raise RuntimeError("Kein Bild von der Kamera erhalten.")
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(frame_rgb).resize(DATA['img_size'])
 
     return pil_image
 
@@ -223,19 +214,9 @@ def load_interpreter():
     if not model_path.exists():
         raise FileNotFoundError(f"Modelldatei nicht gefunden: {model_path}")
 
-    interpreter = tflite.Interpreter(
-        model_path=str(model_path),
-        num_threads=NUM_THREADS
-    )
+    interpreter = tflite.Interpreter(model_path=str(model_path), num_threads=NUM_THREADS)
     interpreter.allocate_tensors()
-
-    # Debug: Input/Output-Details ausgeben
-    input_details  = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-    print(f"[DEBUG] Modell geladen: {AVAILABLE_MODELS[MODEL_KEY]}")
-    print(f"[DEBUG] Input  – shape: {input_details[0]['shape']}, dtype: {input_details[0]['dtype']}")
-    print(f"[DEBUG] Output – shape: {output_details[0]['shape']}, dtype: {output_details[0]['dtype']}")
-
+    print(f"Modell geladen: {AVAILABLE_MODELS[MODEL_KEY]}")
     return interpreter
 
 
@@ -243,32 +224,22 @@ def classify(interpreter, pil_image) -> tuple:
     input_details  = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
-    image_array = np.array(pil_image, dtype=np.float32)
-    img_input   = np.expand_dims(image_array, axis=0)
-
-    print(f"[DEBUG] Input-Array – min: {img_input.min():.3f}, max: {img_input.max():.3f}, mean: {img_input.mean():.3f}")
-
+    # Rohpixelwerte [0, 255] – Normalisierung übernimmt das Modell intern
+    img_input = np.expand_dims(np.array(pil_image, dtype=np.float32), axis=0)
     interpreter.set_tensor(input_details[0]['index'], img_input)
     interpreter.invoke()
 
     output_detail = output_details[0]
     raw_output    = interpreter.get_tensor(output_detail['index'])[0]
 
-    print(f"[DEBUG] Rohes Modell-Output: {raw_output}")
-
     # INT8-Dequantisierung falls nötig
     if output_detail['dtype'] == np.int8:
         scale, zero_point = output_detail['quantization']
         probabilities = (raw_output.astype(np.float32) - zero_point) * scale
-        print(f"[DEBUG] Dequantisiert (scale={scale}, zp={zero_point}): {probabilities}")
     else:
         probabilities = raw_output
 
-    print(f"[DEBUG] Wahrscheinlichkeiten – A: {probabilities[0]:.3f}, B: {probabilities[1]:.3f}, C: {probabilities[2]:.3f}")
-
-    class_index = int(np.argmax(probabilities))
-    confidence  = float(np.max(probabilities))
-    return class_index, confidence
+    return int(np.argmax(probabilities)), float(np.max(probabilities))
 
 
 # ── Hauptschleife ─────────────────────────────────────────────────────────────
@@ -282,7 +253,6 @@ def run_demo():
         setup_gpio()
 
     cap, camera_mode = open_camera()
-    print(f"[DEBUG] Kamera bereit – Modus: {camera_mode}")
 
     if ENABLE_STREAM:
         start_stream_server()
@@ -290,16 +260,14 @@ def run_demo():
     print("\n" + "=" * 50)
     print("  Palettenklassifikation – Demo")
     print(f"  Modell:  {AVAILABLE_MODELS[MODEL_KEY]}")
-    print(f"  Threads: {NUM_THREADS}")
-    print(f"  Kamera:  {camera_mode}")
-    print(f"  Stream:  {'aktiv auf Port ' + str(STREAM_PORT) if ENABLE_STREAM else 'deaktiviert'}")
-    print("  Enter drücken = neue Klassifikation starten.")
-    print("  Beenden mit Strg+C")
+    print(f"  Quelle:  {'Testbilder' if USE_TEST_IMAGES else 'Kamera (' + camera_mode + ')'}")
+    print(f"  Stream:  {'aktiv → Port ' + str(STREAM_PORT) if ENABLE_STREAM else 'deaktiviert'}")
+    print("  Enter drücken = Klassifikation starten | Strg+C = Beenden")
     print("=" * 50 + "\n")
 
     try:
         while True:
-            input("  Drücke Enter für nächste Klassifikation > ")
+            input("  Drücke Enter > ")
             print("── Klassifikation ──────────────────────────────")
 
             pil_image = capture_image(cap, camera_mode)
