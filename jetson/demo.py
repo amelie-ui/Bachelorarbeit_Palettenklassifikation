@@ -273,6 +273,7 @@ def classify(interpreter, pil_image) -> tuple:
 # ── Hauptschleife ─────────────────────────────────────────────────────────────
 
 def run_demo():
+    global latest_frame
     interpreter = load_interpreter()
 
     if ON_JETSON:
