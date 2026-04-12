@@ -34,7 +34,7 @@ NUM_THREADS      = 2
 # Stream: auf True setzen für Livestream im Browser
 # Lokal:      http://192.168.178.150:5000
 # SSH-Tunnel: ssh -L 5000:localhost:5000 amelie@192.168.178.150
-ENABLE_STREAM    = False
+ENABLE_STREAM    = True
 STREAM_PORT      = 5000
 
 # Bildquelle: True = Testbilder aus Datensatz, False = Kamera live
