@@ -209,19 +209,15 @@ def open_camera():
 
 
 def capture_image(cap, mode: str):
-    """
-    Liefert ein PIL-Image für die Klassifikation.
-    Kamera: Frame auf 224×224 skalieren (Modell-Eingabegröße).
-    Stream läuft separat in start_camera_stream_thread() mit 640×480.
-    """
     if USE_TEST_IMAGES:
         all_images = list(PATHS['dataset_test'].rglob('*.jpg'))
         if not all_images:
-            raise FileNotFoundError("Keine Testbilder gefunden – Datensatz auf Jetson übertragen?")
+            raise FileNotFoundError("Keine Testbilder gefunden.")
         img_path   = random.choice(all_images)
         true_label = img_path.parent.name[0]
         print(f"  Testbild: {img_path.name}  (Klasse: {true_label})")
-        return Image.open(img_path).resize(DATA['img_size'])
+        pil_stream  = Image.open(img_path).resize((640, 480))
+        pil_classify = pil_stream.resize(DATA['img_size'])
     else:
         if mode == 'v4l2':
             for _ in range(10):
@@ -229,9 +225,11 @@ def capture_image(cap, mode: str):
         ret, frame = cap.read()
         if not ret:
             raise RuntimeError("Kein Bild von der Kamera erhalten.")
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # Für Klassifikation auf 224×224 skalieren
-        return Image.fromarray(frame_rgb).resize(DATA['img_size'])
+        frame_rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_stream   = Image.fromarray(frame_rgb).resize((640, 480))
+        pil_classify = pil_stream.resize(DATA['img_size'])
+
+    return pil_stream, pil_classify
 
 
 # ── Modell & Inferenz ─────────────────────────────────────────────────────────
@@ -284,9 +282,6 @@ def run_demo():
 
     if ENABLE_STREAM:
         start_stream_server()
-        if not USE_TEST_IMAGES:
-            # Kamera-Stream läuft kontinuierlich im Hintergrund
-            start_camera_stream_thread(cap)
 
     print("\n" + "=" * 50)
     print("  Palettenklassifikation – Demo")
@@ -301,10 +296,15 @@ def run_demo():
             input("  Drücke Enter > ")
             print("── Klassifikation ──────────────────────────────")
 
-            pil_image = capture_image(cap, camera_mode)
+            pil_stream, pil_classify = capture_image(cap, camera_mode)
+
+            # Stream mit großem Bild updaten (640×480)
+            if ENABLE_STREAM:
+                with frame_lock:
+                    latest_frame = pil_stream
 
             t0 = time.perf_counter()
-            class_index, confidence = classify(interpreter, pil_image)
+            class_index, confidence = classify(interpreter, pil_classify)
             duration_ms = (time.perf_counter() - t0) * 1000
 
             predicted = CLASS_NAMES[class_index]
