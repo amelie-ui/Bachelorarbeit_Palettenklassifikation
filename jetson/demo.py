@@ -166,6 +166,7 @@ def capture_image(cap):
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(frame_rgb)
     pil_image = pil_image.resize(DATA['img_size'])
+    pil_image.save('/home/amelie/DasWirdGut_IchKannDas/jetson/last_capture.jpg')
     return pil_image
 
 
