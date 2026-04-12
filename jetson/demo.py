@@ -38,7 +38,7 @@ ENABLE_STREAM    = True
 STREAM_PORT      = 5000
 
 # Bildquelle: True = Testbilder aus Datensatz, False = Kamera live
-USE_TEST_IMAGES  = True
+USE_TEST_IMAGES  = False
 
 AVAILABLE_MODELS = {
     'baseline_fp32':     'baseline_fp32.tflite',
