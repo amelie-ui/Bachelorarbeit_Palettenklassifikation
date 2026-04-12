@@ -29,11 +29,6 @@ from PIL import Image
 MODEL_KEY       = 'baseline_fp32'
 LED_ON_DURATION = 3.0
 NUM_THREADS     = 2
-
-# Auf True setzen für Livestream im Browser
-# Lokal:      http://<jetson-ip>:5000
-# SSH-Tunnel: ssh -L 5000:localhost:5000 amelie@192.168.178.150
-#             → dann http://localhost:5000 im Browser
 ENABLE_STREAM   = False
 STREAM_PORT     = 5000
 
@@ -65,6 +60,7 @@ def setup_gpio():
     GPIO.setmode(GPIO.BOARD)
     for pin in LED_PINS.values():
         GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
+    print("[DEBUG] GPIO initialisiert – Pins:", list(LED_PINS.values()))
 
 
 def all_leds_off():
@@ -91,7 +87,7 @@ def start_stream_server():
     try:
         from flask import Flask, Response
     except ImportError:
-        print("FEHLER: Flask nicht installiert. Bitte: pip install flask")
+        print("FEHLER: Flask nicht installiert.")
         return
 
     app = Flask(__name__)
@@ -112,7 +108,7 @@ def start_stream_server():
                 + buf.getvalue() +
                 b'\r\n'
             )
-            time.sleep(0.04)  # ~25 FPS
+            time.sleep(0.04)
 
     @app.route('/')
     def index():
@@ -147,26 +143,73 @@ def start_stream_server():
         daemon=True
     )
     thread.start()
-    print(f"Stream aktiv → http://192.168.178.150:{STREAM_PORT}")
-    print(f"SSH-Tunnel:    ssh -L {STREAM_PORT}:localhost:{STREAM_PORT} amelie@192.168.178.150")
-    print(f"Dann im Browser: http://localhost:{STREAM_PORT}")
+    print(f"[DEBUG] Stream aktiv → http://192.168.178.150:{STREAM_PORT}")
 
 
 # ── Kamera ────────────────────────────────────────────────────────────────────
 
-def capture_image(cap):
-    """Liest 10 Frames und verwirft sie – nimmt dann den aktuellen Frame."""
-    for _ in range(10):
-        cap.read()  # echte read() statt grab() – leert den Buffer zuverlässig
+def open_camera():
+    """
+    Versucht zuerst GStreamer (Raspberry Pi Kamera), dann Fallback auf /dev/video0.
+    Gibt das cap-Objekt und den verwendeten Modus zurück.
+    """
+    gstreamer_pipeline = (
+        "nvarguscamerasrc ! "
+        "video/x-raw(memory:NVMM), width=224, height=224, format=NV12, framerate=30/1 ! "
+        "nvvidconv ! "
+        "video/x-raw, format=BGRx ! "
+        "videoconvert ! "
+        "video/x-raw, format=BGR ! "
+        "appsink"
+    )
+
+    print("[DEBUG] Versuche GStreamer-Pipeline (Raspberry Pi Kamera)...")
+    cap = cv2.VideoCapture(gstreamer_pipeline, cv2.CAP_GSTREAMER)
+
+    if cap.isOpened():
+        print("[DEBUG] GStreamer-Pipeline erfolgreich geöffnet.")
+        return cap, 'gstreamer'
+
+    print("[DEBUG] GStreamer fehlgeschlagen – Fallback auf /dev/video0 (USB-Kamera).")
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    if cap.isOpened():
+        print("[DEBUG] /dev/video0 erfolgreich geöffnet.")
+        return cap, 'v4l2'
+
+    raise RuntimeError("Keine Kamera verfügbar – weder GStreamer noch /dev/video0.")
+
+
+def capture_image(cap, mode: str):
+    """
+    Nimmt ein aktuelles Bild auf.
+    Bei v4l2: Buffer leeren via mehrfaches read().
+    Bei GStreamer: direkt lesen, Buffer wird intern verwaltet.
+    """
+    if mode == 'v4l2':
+        # Buffer leeren: 10 Frames verwerfen
+        for _ in range(10):
+            cap.read()
 
     ret, frame = cap.read()
+
     if not ret:
         raise RuntimeError("Kein Bild von der Kamera erhalten.")
+
+    # Debug: Rohbild-Statistiken ausgeben
+    print(f"[DEBUG] Frame shape: {frame.shape}, dtype: {frame.dtype}")
+    print(f"[DEBUG] Pixelwerte – min: {frame.min()}, max: {frame.max()}, mean: {frame.mean():.1f}")
 
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(frame_rgb)
     pil_image = pil_image.resize(DATA['img_size'])
-    pil_image.save('/home/amelie/DasWirdGut_IchKannDas/jetson/last_capture.jpg')
+
+    # Bild speichern für visuelle Kontrolle
+    save_path = '/home/amelie/DasWirdGut_IchKannDas/jetson/last_capture.jpg'
+    pil_image.save(save_path)
+    print(f"[DEBUG] Bild gespeichert: {save_path}")
+
     return pil_image
 
 
@@ -185,7 +228,14 @@ def load_interpreter():
         num_threads=NUM_THREADS
     )
     interpreter.allocate_tensors()
-    print(f"Modell geladen: {AVAILABLE_MODELS[MODEL_KEY]}")
+
+    # Debug: Input/Output-Details ausgeben
+    input_details  = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    print(f"[DEBUG] Modell geladen: {AVAILABLE_MODELS[MODEL_KEY]}")
+    print(f"[DEBUG] Input  – shape: {input_details[0]['shape']}, dtype: {input_details[0]['dtype']}")
+    print(f"[DEBUG] Output – shape: {output_details[0]['shape']}, dtype: {output_details[0]['dtype']}")
+
     return interpreter
 
 
@@ -196,18 +246,25 @@ def classify(interpreter, pil_image) -> tuple:
     image_array = np.array(pil_image, dtype=np.float32) / 255.0
     img_input   = np.expand_dims(image_array, axis=0)
 
+    print(f"[DEBUG] Input-Array – min: {img_input.min():.3f}, max: {img_input.max():.3f}, mean: {img_input.mean():.3f}")
+
     interpreter.set_tensor(input_details[0]['index'], img_input)
     interpreter.invoke()
 
     output_detail = output_details[0]
     raw_output    = interpreter.get_tensor(output_detail['index'])[0]
 
+    print(f"[DEBUG] Rohes Modell-Output: {raw_output}")
+
     # INT8-Dequantisierung falls nötig
     if output_detail['dtype'] == np.int8:
         scale, zero_point = output_detail['quantization']
         probabilities = (raw_output.astype(np.float32) - zero_point) * scale
+        print(f"[DEBUG] Dequantisiert (scale={scale}, zp={zero_point}): {probabilities}")
     else:
         probabilities = raw_output
+
+    print(f"[DEBUG] Wahrscheinlichkeiten – A: {probabilities[0]:.3f}, B: {probabilities[1]:.3f}, C: {probabilities[2]:.3f}")
 
     class_index = int(np.argmax(probabilities))
     confidence  = float(np.max(probabilities))
@@ -224,10 +281,8 @@ def run_demo():
     if ON_JETSON:
         setup_gpio()
 
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        raise RuntimeError("Kamera konnte nicht geöffnet werden (/dev/video0).")
-    print("Kamera bereit.")
+    cap, camera_mode = open_camera()
+    print(f"[DEBUG] Kamera bereit – Modus: {camera_mode}")
 
     if ENABLE_STREAM:
         start_stream_server()
@@ -236,6 +291,7 @@ def run_demo():
     print("  Palettenklassifikation – Demo")
     print(f"  Modell:  {AVAILABLE_MODELS[MODEL_KEY]}")
     print(f"  Threads: {NUM_THREADS}")
+    print(f"  Kamera:  {camera_mode}")
     print(f"  Stream:  {'aktiv auf Port ' + str(STREAM_PORT) if ENABLE_STREAM else 'deaktiviert'}")
     print("  Enter drücken = neue Klassifikation starten.")
     print("  Beenden mit Strg+C")
@@ -246,9 +302,8 @@ def run_demo():
             input("  Drücke Enter für nächste Klassifikation > ")
             print("── Klassifikation ──────────────────────────────")
 
-            pil_image = capture_image(cap)
+            pil_image = capture_image(cap, camera_mode)
 
-            # Frame in Stream-Buffer schreiben
             if ENABLE_STREAM:
                 with frame_lock:
                     latest_frame = pil_image
