@@ -243,7 +243,7 @@ def classify(interpreter, pil_image) -> tuple:
     input_details  = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
-    image_array = np.array(pil_image, dtype=np.float32) / 255.0
+    image_array = np.array(pil_image, dtype=np.float32)
     img_input   = np.expand_dims(image_array, axis=0)
 
     print(f"[DEBUG] Input-Array – min: {img_input.min():.3f}, max: {img_input.max():.3f}, mean: {img_input.mean():.3f}")
