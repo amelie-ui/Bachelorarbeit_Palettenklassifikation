@@ -31,7 +31,7 @@ from PIL import Image
 # ── Konfiguration ─────────────────────────────────────────────────────────────
 MODEL_KEY        = 'baseline_fp32'
 LED_ON_DURATION  = 1.0
-NUM_THREADS      = 2
+NUM_THREADS      = 4
 ENABLE_STREAM    = True
 STREAM_PORT      = 5000
 USE_TEST_IMAGES  = False
