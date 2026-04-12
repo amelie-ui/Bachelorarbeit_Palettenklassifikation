@@ -5,6 +5,7 @@ import threading
 import numpy as np
 from pathlib import Path
 import random
+import io
 
 os.environ['OPENBLAS_CORETYPE'] = 'ARMV8'
 
@@ -106,7 +107,6 @@ def start_stream_server():
             if frame is None:
                 time.sleep(0.05)
                 continue
-            import io
             buf = io.BytesIO()
             frame.save(buf, format='JPEG', quality=85)
             yield (
@@ -127,7 +127,8 @@ def start_stream_server():
                 body {{ background: #111; color: #eee; font-family: sans-serif;
                         display: flex; flex-direction: column; align-items: center;
                         padding: 2rem; }}
-                img  {{ border: 2px solid #444; border-radius: 8px; max-width: 640px; }}
+                img  {{ border: 2px solid #444; border-radius: 8px;
+                        width: 640px; height: auto; }}
             </style>
         </head>
         <body>
@@ -154,13 +155,39 @@ def start_stream_server():
     print(f"SSH-Tunnel:   ssh -L {STREAM_PORT}:localhost:{STREAM_PORT} amelie@192.168.178.150")
 
 
+def start_camera_stream_thread(cap):
+    """
+    Hintergrund-Thread: liest kontinuierlich Frames von der Kamera
+    und schreibt sie in latest_frame für den Stream.
+    Läuft unabhängig vom Enter-Trigger — der Browser zeigt immer
+    das aktuelle Kamerabild, auch zwischen Klassifikationen.
+    """
+    global latest_frame
+
+    def loop():
+        while True:
+            try:
+                ret, frame = cap.read()
+                if ret:
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_image = Image.fromarray(frame_rgb).resize((640, 480))
+                    with frame_lock:
+                        latest_frame = pil_image
+                time.sleep(0.04)  # ~25 FPS
+            except Exception:
+                break
+
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+
+
 # ── Kamera ────────────────────────────────────────────────────────────────────
 
 def open_camera():
     """Öffnet GStreamer-Pipeline (Raspberry Pi Kamera), Fallback auf /dev/video0."""
     pipeline = (
         "nvarguscamerasrc ! "
-        "video/x-raw(memory:NVMM), width=224, height=224, format=NV12, framerate=30/1 ! "
+        "video/x-raw(memory:NVMM), width=640, height=480, format=NV12, framerate=30/1 ! "
         "nvvidconv ! "
         "video/x-raw, format=BGRx ! "
         "videoconvert ! "
@@ -182,7 +209,11 @@ def open_camera():
 
 
 def capture_image(cap, mode: str):
-    """Liefert ein PIL-Image – entweder vom Datensatz oder von der Kamera."""
+    """
+    Liefert ein PIL-Image für die Klassifikation.
+    Kamera: Frame auf 224×224 skalieren (Modell-Eingabegröße).
+    Stream läuft separat in start_camera_stream_thread() mit 640×480.
+    """
     if USE_TEST_IMAGES:
         all_images = list(PATHS['dataset_test'].rglob('*.jpg'))
         if not all_images:
@@ -190,7 +221,7 @@ def capture_image(cap, mode: str):
         img_path   = random.choice(all_images)
         true_label = img_path.parent.name[0]
         print(f"  Testbild: {img_path.name}  (Klasse: {true_label})")
-        pil_image  = Image.open(img_path).resize(DATA['img_size'])
+        return Image.open(img_path).resize(DATA['img_size'])
     else:
         if mode == 'v4l2':
             for _ in range(10):
@@ -199,9 +230,8 @@ def capture_image(cap, mode: str):
         if not ret:
             raise RuntimeError("Kein Bild von der Kamera erhalten.")
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(frame_rgb).resize(DATA['img_size'])
-
-    return pil_image
+        # Für Klassifikation auf 224×224 skalieren
+        return Image.fromarray(frame_rgb).resize(DATA['img_size'])
 
 
 # ── Modell & Inferenz ─────────────────────────────────────────────────────────
@@ -245,8 +275,6 @@ def classify(interpreter, pil_image) -> tuple:
 # ── Hauptschleife ─────────────────────────────────────────────────────────────
 
 def run_demo():
-    global latest_frame
-
     interpreter = load_interpreter()
 
     if ON_JETSON:
@@ -256,6 +284,9 @@ def run_demo():
 
     if ENABLE_STREAM:
         start_stream_server()
+        if not USE_TEST_IMAGES:
+            # Kamera-Stream läuft kontinuierlich im Hintergrund
+            start_camera_stream_thread(cap)
 
     print("\n" + "=" * 50)
     print("  Palettenklassifikation – Demo")
@@ -271,10 +302,6 @@ def run_demo():
             print("── Klassifikation ──────────────────────────────")
 
             pil_image = capture_image(cap, camera_mode)
-
-            if ENABLE_STREAM:
-                with frame_lock:
-                    latest_frame = pil_image
 
             t0 = time.perf_counter()
             class_index, confidence = classify(interpreter, pil_image)
