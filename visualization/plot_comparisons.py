@@ -87,52 +87,105 @@ def plot_metrics_bar(df):
     plt.show()
 
 def plot_f1_heatmap(df):
-    """Heatmap: klassenweise F1-Scores je Variante."""
+    """F1-Heatmaps im Konfusionsmatrix-Stil:
+       - 2x nach Gruppe (Baseline / Augmentation)
+       - 3x nach Quantisierung (FP32 / FP16 / INT8)
+    """
 
     f1_cols = [c for c in df.columns if c.startswith('F1 ')]
     if not f1_cols:
         return
 
-    heat = df.set_index('Modell')[f1_cols].copy()
-    heat.columns = [c.replace('F1 ', '') for c in heat.columns]
+    LABEL_MAP   = {'A_PALLET': 'A', 'B_PALLET': 'B', 'C_PALLET': 'C'}
+    quant_order = {'fp32': 0, 'fp16': 1, 'int8': 2}
 
-    # Klassennamen umbenennen
-    LABEL_MAP = {
-        'A_PALLET': 'A',
-        'B_PALLET': 'B',
-        'C_PALLET': 'C',
+    def _prepare(df_sub, y_label_fn):
+        """Matrix + Labels aus einem gefilterten Sub-DataFrame."""
+        heat = df_sub.set_index('Modell')[f1_cols].copy()
+        heat.columns = [c.replace('F1 ', '') for c in heat.columns]
+        heat.columns = [LABEL_MAP.get(c, c) for c in heat.columns]
+        heat = heat[[c for c in heat.columns if 'macro' not in c.lower()]]
+        values      = heat.values.astype(float)
+        col_labels  = list(heat.columns)
+        row_labels  = [y_label_fn(m) for m in heat.index]
+        return values, col_labels, row_labels
+
+    def _save_heatmap(values, col_labels, row_labels, title, filename):
+        fig, ax = plt.subplots(figsize=(5, 4))
+        ax.imshow(values, cmap='Blues', vmin=0, vmax=1)
+
+        ax.set_xticks(np.arange(-0.5, len(col_labels), 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(row_labels), 1), minor=True)
+        ax.grid(which='minor', color='white', linewidth=2)
+        ax.tick_params(which='minor', bottom=False, left=False)
+
+        ax.set_xticks(range(len(col_labels)))
+        ax.set_yticks(range(len(row_labels)))
+        ax.set_xticklabels(col_labels)
+        ax.set_yticklabels(row_labels)
+        ax.set_xlabel('Klasse')
+        ax.set_ylabel('')
+        ax.set_title(title)
+
+        thresh = 0.5
+        for i in range(values.shape[0]):
+            for j in range(values.shape[1]):
+                ax.text(j, i, f'{values[i, j]:.2f}',
+                        ha='center', va='center',
+                        color='white' if values[i, j] > thresh else 'black',
+                        fontsize=12)
+
+        plt.tight_layout()
+        out = PATHS['plots'] / filename
+        plt.savefig(out, dpi=150, bbox_inches='tight')
+        print(f'Gespeichert: {out}')
+        plt.close()
+
+    # --- 1. Gruppe: Baseline / Augmentation ---
+    groups = {
+        'Baseline':     df[df['Modell'].str.contains('baseline')],
+        'Augmentation': df[df['Modell'].str.contains('augmentation')],
     }
-    heat.columns = [LABEL_MAP.get(c, c) for c in heat.columns]
 
-    # Makro-Spalte entfernen falls vorhanden
-    heat = heat[[c for c in heat.columns if 'macro' not in c.lower()]]
+    for group_name, df_group in groups.items():
+        if df_group.empty:
+            continue
 
-    plt.figure(figsize=(8, max(4, len(df) * 0.6)))
+        df_group = df_group.copy()
+        df_group['_sort'] = df_group['Modell'].apply(
+            lambda x: quant_order.get(x.split('_')[-1], 99)
+        )
+        df_group = df_group.sort_values('_sort').drop('_sort', axis=1)
 
-    ax = sns.heatmap(
-        heat,
-        annot=True,
-        fmt=".2f",
-        cmap="Blues",
-        linewidths=0.5,
-        linecolor='white',
-        cbar=False,          # Farbskala entfernt
-        vmin=0,
-        vmax=1,
-        annot_kws={"size": 9, "weight": "bold"}
-    )
+        values, col_labels, row_labels = _prepare(
+            df_group,
+            y_label_fn=lambda m: m.split('_')[-1].upper()  # FP32, FP16, INT8
+        )
+        _save_heatmap(
+            values, col_labels, row_labels,
+            title=f'Klassenweise F1-Scores – {group_name}',
+            filename=f'f1_heatmap_{group_name.lower()}.png'
+        )
 
-    plt.title('Klassenweise F1-Scores', fontsize=14, weight='bold')
-    ax.set_xlabel('')   # Achsenbeschriftungen entfernt
-    ax.set_ylabel('')
+    # --- 2. Gruppe: FP32 / FP16 / INT8 ---
+    for quant in ['fp32', 'fp16', 'int8']:
+        df_q = df[df['Modell'].str.endswith(quant)].copy()
+        if df_q.empty:
+            continue
 
-    plt.xticks(rotation=0, ha='center')
-    plt.yticks(rotation=0)
-    plt.tight_layout()
+        # Reihenfolge: baseline vor augmentation
+        df_q['_sort'] = df_q['Modell'].apply(lambda x: 0 if 'baseline' in x else 1)
+        df_q = df_q.sort_values('_sort').drop('_sort', axis=1)
 
-    plt.savefig(PATHS['plots'] / 'f1_heatmap.png', dpi=200)
-    print('Gespeichert: f1_heatmap.png')
-    plt.close()
+        values, col_labels, row_labels = _prepare(
+            df_q,
+            y_label_fn=lambda m: 'Baseline' if 'baseline' in m else 'Augmentation'
+        )
+        _save_heatmap(
+            values, col_labels, row_labels,
+            title=quant.upper(),               # ← nur "FP32" / "FP16" / "INT8"
+            filename=f'f1_heatmap_{quant}.png'
+        )
 
 def generate_confusion_matrices(df):
     """

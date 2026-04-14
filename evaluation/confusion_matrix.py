@@ -19,6 +19,10 @@ def plot_confusion_matrix(y_true, y_pred, model_label: str):
         y_pred:      vorhergesagte Labels (numpy array)
         model_label: z.B. 'baseline_fp32'
     """
+    parts = model_label.split('_')
+    quant = parts[-1].upper()  # FP32 / FP16 / INT8
+    group = parts[0].capitalize()  # Baseline / Augmentation
+    title = f'{quant}'
     class_names = [LABEL_MAP.get(c, c) for c in DATA['classes']]
     cm_abs = confusion_matrix(y_true, y_pred)
     cm = cm_abs.astype(float) / cm_abs.sum(axis=1, keepdims=True)
@@ -39,7 +43,7 @@ def plot_confusion_matrix(y_true, y_pred, model_label: str):
     ax.set_yticklabels(class_names)
     ax.set_xlabel('Vorhergesagte Klasse')
     ax.set_ylabel('Tatsächliche Klasse')
-    ax.set_title(f'{model_label}')
+    ax.set_title(title)
 
     # Zahlenwerte in den Zellen
     thresh = 0.5
