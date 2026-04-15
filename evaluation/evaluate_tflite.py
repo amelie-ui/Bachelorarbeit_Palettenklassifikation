@@ -83,8 +83,8 @@ def evaluate_tflite(model_name: str = 'baseline', quantization: str = 'fp32'):
         'quantization': quantization,  # Nur bei TFLite
         'accuracy': float(accuracy),
         'macro_f1': float(macro_f1),
-        'y_true': y_true.tolist(),  # WICHTIG: .tolist() für JSON-Serialisierung
-        'y_pred': y_pred.tolist(),  # WICHTIG
+        'y_true': y_true.tolist(),  # .tolist() required for JSON serialization
+        'y_pred': y_pred.tolist(),
         'report': report,
     }
     output_path = PATHS['metrics'] / f'{model_name}_{quantization}_metrics.json'

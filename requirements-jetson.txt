@@ -1,0 +1,20 @@
+# Jetson-specific dependencies (Jetson Nano / Xavier / Orin)
+# 
+# IMPORTANT: TFLite setup on Jetson Nano requires special handling due to ARM architecture constraints
+# Follow installation steps below to avoid "Illegal instruction" errors
+#
+# Installation Instructions for Jetson Nano:
+# ============================================
+# 1. Install the Google Coral optimized TFLite wheel (compiled for Python 3.6, ARMv8):
+#    pip install https://github.com/google-coral/pycoral/releases/download/v2.0.0/tflite_runtime-2.5.0.post1-cp36-cp36m-linux_aarch64.whl
+#
+# 2. Remove the newer numpy that gets installed with the wheel:
+#    pip uninstall numpy
+#
+# 3. The system numpy (1.13.3) will be used instead - this avoids "Illegal instruction" errors
+#
+# Note: Do NOT list tflite_runtime in pip requirements - install manually as above
+# The standard tflite_runtime wheels are incompatible with Jetson Nano's ARM architecture
+
+# GPIO control for Jetson boards
+Jetson.GPIO>=2.0.0

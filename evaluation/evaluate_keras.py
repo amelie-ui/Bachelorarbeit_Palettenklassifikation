@@ -67,7 +67,7 @@ def evaluate_keras(model_name: str = 'baseline'):
         'accuracy': float(accuracy),
         'macro_f1': float(macro_f1),
         'y_true': y_true.tolist(),  # Neu: Konvertierung von numpy zu Liste für JSON
-        'y_pred': y_pred.tolist(),  # Neu
+        'y_pred': y_pred.tolist(),
         'report': report,
     }
     output_path = PATHS['metrics'] / f'{model_name}_keras_metrics.json'

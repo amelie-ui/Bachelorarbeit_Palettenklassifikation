@@ -8,6 +8,7 @@ import random
 import io
 
 os.environ['OPENBLAS_CORETYPE'] = 'ARMV8'
+# Confidence threshold for accepting predictions (models typically trained with ~0.7-0.8 threshold)
 CONFIDENCE_THRESHOLD = 0.70
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -35,7 +36,7 @@ NUM_THREADS      = 4
 ENABLE_STREAM    = True
 STREAM_PORT      = 5000
 USE_TEST_IMAGES  = False
-''
+
 AVAILABLE_MODELS = {
     'baseline_fp32':     'baseline_fp32.tflite',
     'baseline_fp16':     'baseline_fp16.tflite',

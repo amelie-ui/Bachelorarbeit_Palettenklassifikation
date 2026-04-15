@@ -12,7 +12,6 @@ PATHS = {
     'grad_cam':     ROOT / 'outputs' / 'grad_cam',
 }
 
-# Die einzelnen Dictionarys sollen vielleicht noch weg
 DATA = {
     'img_size':          (224, 224),
     'batch_size':        32,

@@ -4,13 +4,13 @@ from tensorflow.keras import layers
 from config import DATA
 
 
-#Constants
+# Constants
 Image_size = (224, 224)
 Image_shape = Image_size + (3,)
 
 def build_model(num_classes: int):
 
-    #Backbone
+    # Backbone
     base_model = tf.keras.applications.MobileNetV2(
         input_shape = Image_shape,
         alpha = 1.0,
@@ -28,10 +28,9 @@ def build_model(num_classes: int):
     # Feature Extraction (training=False: BatchNorm im Inferenzmodus)
     x = base_model(x, training=False)
 
-    # Klassifikationskopf --> hier muss ich nochmal schauen wie ich das begründe!
+    # Classification head
     x = layers.GlobalAveragePooling2D()(x)
     x = layers.Dropout(MODEL['dropout'])(x)
-    #will ich Dense???
     outputs = layers.Dense(num_classes, activation='softmax')(x)
 
     model = tf.keras.Model(inputs, outputs)

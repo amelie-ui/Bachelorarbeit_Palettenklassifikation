@@ -10,11 +10,11 @@ def train_baseline():
     train_ds = train_ds.cache().shuffle(245).prefetch(AUTOTUNE)
     val_ds = val_ds.cache().prefetch(AUTOTUNE)
     num_classes = len(DATA['classes'])
-    model, base_model = build_model(num_classes)             # hier _ damit der zweite Wert ignoriert wird, den brauche ich noch für Fine Tuning test
+    model, base_model = build_model(num_classes)
 
     model.compile(
         optimizer = tf.keras.optimizers.legacy.Adam(learning_rate = TRAINING['learning_rate']),
-        loss = 'sparse_categorical_crossentropy',            #hier muss ich nochmal nachschauen ob diese Loss Function begründet werden kann
+        loss = 'sparse_categorical_crossentropy',
         metrics = ['accuracy'])
 
     early_stop = tf.keras.callbacks.EarlyStopping(
@@ -22,7 +22,7 @@ def train_baseline():
         patience=TRAINING['patience'],
         restore_best_weights=True
     )
-    checkpoint = tf.keras.callbacks.ModelCheckpoint(            #hier verstehe ich nicht ganz ob das jetzt sinvoll ist und wenn ja wofür und ob es nicht reicht, wenn earlystopping schon die besten gewichte behät
+    checkpoint = tf.keras.callbacks.ModelCheckpoint(
         filepath=str(PATHS['models'] / 'baseline.keras'),
         monitor='val_loss',
         save_best_only=True
