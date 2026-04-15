@@ -1,66 +1,56 @@
-# DasWirdGut
+# Bachelorarbeit: Palettenklassifikation
 
-Image classification system for pallet detection using MobileNetV2 with TensorFlow Keras.
+Image-Klassifikation für Paletten-Erkennung mit MobileNetV2 und TensorFlow.
 
-## Setup
+## Quick Start
 
-### Standard Installation
+### Installation
 ```bash
 python -m venv abyss
 source abyss/bin/activate
 pip install -r requirements.txt
 ```
 
-### Jetson Nano / Xavier / Orin
-Follow [JETSON_SETUP.md](JETSON_SETUP.md) for ARM-specific TFLite configuration.
+### Jetson Nano Setup
+Siehe [JETSON_SETUP.md](JETSON_SETUP.md) für ARM-spezifische TFLite-Konfiguration.
 
-## Project Structure
+## Projekt-Struktur
 
 ```
-├── config.py                  # Global paths & hyperparameters
-├── training/                  # Model training & callbacks
-│   ├── model.py              # MobileNetV2 architecture
-│   ├── train_baseline.py     # Baseline training script
-│   └── train_augmentation.py # Augmented dataset training
-├── conversion/               # Model quantization (FP16, INT8)
-├── evaluation/               # Metrics & Grad-CAM analysis
-├── visualization/            # Training plots & comparisons
-├── data/                      # Train/test data loaders
-├── jetson/                    # Jetson Nano deployments
-│   ├── demo.py              # Real-time inference with GPIO
-│   ├── benchmark.py         # Performance benchmarking
-│   └── test.py              # GPIO hardware testing
-└── notebooks/               # Jupyter analysis notebooks
+├── config.py              # Pfade & Hyperparameter
+├── training/              # Modell-Training
+│   ├── model.py          # MobileNetV2 Architektur
+│   ├── train_baseline.py # Baseline-Training
+│   └── train_augmentation.py
+├── conversion/           # Quantisierung (FP16, INT8)
+├── evaluation/           # Metriken & Grad-CAM
+├── visualization/        # Plots & Vergleiche
+├── data/                 # Train/Test-Daten
+├── jetson/              # Jetson Nano Deployment
+│   ├── demo.py          # Live-Inferenz mit Kamera
+│   ├── benchmark.py     # Performance-Tests
+│   └── test.py          # GPIO-Test
+└── notebooks/           # Jupyter Analysen
 ```
 
-## Quick Start
+## Befehle
 
-### Train a Model
 ```bash
-python run_training.py
+python run_training.py         # Modell trainieren
+python run_evaluation.py       # Metriken & Grad-CAM
+python run_conversion.py       # .tflite-Conversion
+python jetson/demo.py          # Live-Inferenz (Jetson)
 ```
 
-### Evaluate & Convert
-```bash
-python run_evaluation.py  # Keras model metrics
-python run_conversion.py  # Generate FP16/INT8 .tflite files
-```
+## Modelle
 
-### Jetson Deployment
-```bash
-python jetson/demo.py     # Real-time inference with camera
-python jetson/benchmark.py # Performance metrics
-```
-
-## Models
-
-- **Baseline:** MobileNetV2 (224×224, 3 classes)
-- **Augmented:** Same architecture with augmentation pipeline
-- **Formats:** Keras (.keras), TFLite (FP32/FP16/INT8)
+- **Baseline:** MobileNetV2 (224×224, 3 Klassen)
+- **Augmented:** Mit Augmentations-Pipeline
+- **Formate:** Keras (.keras), TFLite (FP32/FP16/INT8)
 
 ## Requirements
 
 - Python 3.9+
 - TensorFlow 2.15.0
-- See `requirements.txt` for dependencies
-- See `requirements-jetson.txt` for ARM-specific packages
+- Siehe `requirements.txt` und `requirements-jetson.txt`
+
