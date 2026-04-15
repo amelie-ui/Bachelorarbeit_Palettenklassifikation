@@ -1,13 +1,11 @@
 # Bachelorarbeit: Palettenklassifikation
 
-Image-Klassifikation für Paletten-Erkennung mit MobileNetV2 und TensorFlow.
-
 ## Quick Start
 
 ### Installation
 ```bash
-python -m venv abyss
-source abyss/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
